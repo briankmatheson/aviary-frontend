@@ -11,6 +11,7 @@ menu = """
 <li><a href="https://harbor.local">harbor</a></li>
 <li><a href="https://mlflow.local">mlflow</a></li>
 <li><a href="https://postgres-ui.local">postgres-ui</a></li>
+<li><a href="https://minio.local">minio</a></li>
 
 """
 
@@ -18,5 +19,5 @@ menu = """
 def index():
     return menu
 
-run(host='localhost', port=8080)
+run(host='0.0.0.0', port=8080)
 

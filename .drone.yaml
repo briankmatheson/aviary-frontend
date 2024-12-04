@@ -1,0 +1,11 @@
+kind: pipeline
+type: docker
+name: test
+
+steps:
+- name: pwd
+  image: debian
+  commands:
+  - pwd
+
+  

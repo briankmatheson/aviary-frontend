@@ -1,22 +1,41 @@
-from bottle import route, run, template
+from bottle import route, run, template, static_file
+
+
+@route('/favicon.ico')
+def favicon():
+    return static_file('favicon.ico', root='./') 
+
+@route('/aviary.png')
+def favicon():
+    return static_file('aviary.png', root='./') 
 
 style_header = """
-<head>
+<head><title>Aviary Platform</title>
 <style>
 ul {
   list-style-type: none;
   margin: 16;
   padding: 16;
   overflow: hidden;
-  background-color: LightGreen;
-  width: 30%;
+  width: 20%;
+  background-image: linear-gradient(DarkSlateGray, LightGreen, NavajoWhite
+);
 }
 
 lh {
-  float: center;
-  text-align: right;
-  height: 150px;
+  text-align: center;
+  height: 42%;
+  width: 90%;
   color: NavajoWhite;
+  display: block;
+  float: center;
+  vertical-align: top;
+  background-position-x: center; 
+  background-position-y: center; 
+  background-image: url("aviary.png");
+  background-repeat: no-repeat;
+  background-size: 70%;
+  background-float: right;
 }
 
 li {
@@ -26,10 +45,10 @@ li {
 
 li a {
   display: block;
-  color: Gray90;
+  color: Blue;
   text-align: left;
   padding: 8px;
-  width: 100px;
+  width: 90%;
   text-decoration: none;
 }
 
@@ -44,9 +63,8 @@ li a:hover {
 
 menu = """
 <body>
-<ul >
-<lh><center><h1>Aviary</h1></center></lh>
-<li></li>
+<ul>
+<lh><h1>Aviary Platform</h1></lh>
 <li><a href="https://gitea">gitea</a></li>
 <li><a href="https://drone.local">drone</a></li>
 <li><a href="https://harbor">harbor</a></li>

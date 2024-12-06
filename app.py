@@ -6,8 +6,12 @@ def favicon():
     return static_file('favicon.ico', root='./') 
 
 @route('/aviary.png')
-def favicon():
+def logo():
     return static_file('aviary.png', root='./') 
+
+@route('/ca.crt')
+def ca():
+    return static_file('ca.crt', root='./') 
 
 style_header = """
 <head><title>Aviary Platform</title>
@@ -76,6 +80,7 @@ menu = """
 <li><a href="https://rustpad.local">rustpad</a></li>
 <li><a href="https://grafana.local">grafana</a></li>
 </ul>
+<a href="/ca.crt">ca</a>
 </body>
 </html>
 """

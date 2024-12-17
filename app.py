@@ -22,15 +22,14 @@ ul {
   padding: 16;
   overflow: hidden;
   width: 20%;
-  background-image: linear-gradient(DarkSlateGray, LightGreen, NavajoWhite
-);
+  background-image: linear-gradient(DarkSlateGray, #f1fef1, #fafaf1);
 }
 
 lh {
   text-align: center;
   height: 42%;
   width: 90%;
-  color: NavajoWhite;
+  color: #fafaf1;
   display: block;
   float: center;
   vertical-align: top;
@@ -57,7 +56,7 @@ li a {
 }
 
 li a:hover {
-  color: NavajoWhite;
+  color: #fafaf1;
   background-color: DarkSlateGray;
   margin-right: 10px;
 }
@@ -89,5 +88,8 @@ menu = """
 def index():
     return style_header, menu
 
-run(host='0.0.0.0', port=8080)
 
+def app():
+    run(host='0.0.0.0', port=8080)
+
+app()

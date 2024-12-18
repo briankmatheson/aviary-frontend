@@ -18,7 +18,7 @@ steps:
   - apt update
   - apt -y install python3-bottle gunicorn
 - name: docker  
-  image: plugins/docker
+  image: docker
   settings:
     username: robot$drone
     password: to0EaYegAenDX2KRI0cQKGfkNOuXD9kt

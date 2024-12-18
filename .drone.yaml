@@ -1,12 +1,18 @@
 kind: pipeline
-type: kubernetes
-name: test
+name: default
 namespace: drone
 
 steps:
 - name: clone
+  image: debian
   settings:
     skip_verify: true
+---
+kind: pipeline
+type: kubernetes
+name: test
+
+steps:
 - name: pwd
   image: debian
   commands:

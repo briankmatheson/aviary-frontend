@@ -8,5 +8,10 @@ steps:
   image: debian
   commands:
   - pwd
+- name: build
+  image: debian
+  commands:
+  - docker build .
+
 
   

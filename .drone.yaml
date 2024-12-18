@@ -26,5 +26,5 @@ steps:
     tags:
     - latest
   commands:
-    docker build -t harbor:443/tmp/foo .
-    docker push harbor:443/tmp/foo
+    - docker build -t harbor:443/tmp/foo .
+    - docker push harbor:443/tmp/foo

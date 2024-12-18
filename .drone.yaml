@@ -24,5 +24,4 @@ steps:
   - docker tag foo harbor:443/tmp/foo
   - docker push haarbor:443/tmp/foo
   volumes:
-  - /var/run/docker.sock:/var/run/docker.sock
   - /var/run/containerd:/var/run/containerd

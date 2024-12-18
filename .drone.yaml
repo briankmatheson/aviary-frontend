@@ -19,12 +19,6 @@ steps:
   - apt -y install python3-bottle gunicorn
 - name: docker  
   image: docker
-  settings:
-    username: robot$drone
-    password: to0EaYegAenDX2KRI0cQKGfkNOuXD9kt
-    repo: harbor:443/tmp/foo
-    tags:
-    - latest
   commands:
     - docker build -t harbor:443/tmp/foo .
     - docker push harbor:443/tmp/foo

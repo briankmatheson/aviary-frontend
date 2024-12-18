@@ -25,6 +25,11 @@ steps:
     repo: harbor:443/tmp/foo
     tags:
     - latest
+  volumes:
+  - name: certs
+    path: /etc/ssl/certs
 
 volumes:
-  - /etc/ssl/certs: /etc/ssl/certs
+  - name: certs
+    host:
+      path: /etc/ssl/certs

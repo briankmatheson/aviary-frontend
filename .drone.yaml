@@ -1,7 +1,7 @@
 ---
 kind: pipeline
-type: kubernetes
-name: test
+type: docker
+name: aviary-frontend
 
 clone:
   skip_verify: true
@@ -17,8 +17,3 @@ steps:
   commands:
   - apt update
   - apt -y install python3-bottle gunicorn
-- name: docker  
-  image: docker
-  commands:
-    - docker build -t harbor:443/tmp/foo .
-    - docker push harbor:443/tmp/foo

@@ -16,8 +16,8 @@ steps:
 - name: docker  
   image: plugins/docker
   settings:
-    username: bmath
-    password: none
+    username: robot$drone
+    password: to0EaYegAenDX2KRI0cQKGfkNOuXD9kt
     repo: harbor:443/tmp/foo
     tags:
     - latest

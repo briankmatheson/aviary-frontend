@@ -27,4 +27,4 @@ steps:
     - latest
 
 volumes:
-  /etc/ssl/certs:/etc/ssl/certs
+  - /etc/ssl/certs:/etc/ssl/certs

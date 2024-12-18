@@ -2,7 +2,7 @@ kind: pipeline
 name: default
 steps:
 - name: clone
-  image: drone/git
+  image: debian
   settings:
     skip_verify: true
 ---

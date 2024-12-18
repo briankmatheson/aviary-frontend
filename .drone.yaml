@@ -9,9 +9,9 @@ steps:
   commands:
   - pwd
 - name: build
-  image: docker
+  image: debian
   commands:
-  - docker build .
-
+  - apt update
+  - apt -y install python3-bottle gunicorn
 
   

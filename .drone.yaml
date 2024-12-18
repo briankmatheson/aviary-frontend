@@ -5,7 +5,6 @@ namespace: drone
 
 steps:
 - name: clone
-  image: debian
   settings:
     skip_verify: true
 - name: pwd

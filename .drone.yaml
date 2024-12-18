@@ -1,4 +1,12 @@
 kind: pipeline
+name: default
+steps:
+- name: clone
+  image: drone/git
+  settings:
+    skip_verify: true
+---
+kind: pipeline
 type: kubernetes
 name: test
 namespace: drone

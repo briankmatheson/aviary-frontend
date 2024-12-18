@@ -19,13 +19,9 @@ steps:
   - apt -y install python3-bottle gunicorn
 - name: contain
   image: docker
+  privileged: true
   commands:
   - docker build -t foo .
   - docker tag foo harbor:443/tmp/foo
   - docker push haarbor:443/tmp/foo
   
-services:
-  docker:
-    image: docker:dind
-    command: [ "--tls=false" ]
-    privileged: true

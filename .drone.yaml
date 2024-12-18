@@ -13,5 +13,11 @@ steps:
   commands:
   - apt update
   - apt -y install python3-bottle gunicorn
-
-  
+- name: docker  
+  image: plugins/docker
+  settings:
+    username: bmath
+    password: none
+    repo: harbor:443/tmp/foo
+    tags:
+    - latest

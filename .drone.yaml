@@ -23,7 +23,7 @@ steps:
     password: Drone1111
     registry: harbor:443
     repo: harbor:443/tmp/aviary-frontend
-    tags: drone
+    tags: latest
     skip_tls_verify: true
 
   volumes:

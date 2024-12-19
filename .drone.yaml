@@ -17,19 +17,14 @@ steps:
   commands:
   - apt update
 - name: kaniko  
-  image: plugins/kaniko:1.10.4
+  image: banzaicloud/drone-kaniko
   settings:
     privileged: true
     username: drone 
     password: Drone1111
     repo: harbor:443/tmp/foo
     skip_tls_verify: true
+    json_key:
+      from_secret: kaniko-secret
     tags:
     - latest
-  volumes: 
-  - name: config.json
-    path: /.docker
-volumes:
-  - name: config.json
-    secret:
-      name: kaniko-secret

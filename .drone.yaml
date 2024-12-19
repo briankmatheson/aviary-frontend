@@ -17,7 +17,7 @@ steps:
   commands:
   - apt update
 - name: kaniko  
-  image: banzaicloud/drone-kaniko
+  image: drone/drone-kaniko:stable
   settings:
     username: drone 
     password: Drone1111

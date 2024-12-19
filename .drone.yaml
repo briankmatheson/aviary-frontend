@@ -32,4 +32,4 @@ steps:
 volumes:
   - name: certs
     host:
-      path: /etc/ssl/certs/ca-certificates.crt
+      path: /etc/ssl/certs

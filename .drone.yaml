@@ -27,10 +27,10 @@ steps:
     - latest
   volumes: 
   - name: certs
-    path: /etc/ssl
+    path: /etc/ssl/certs/ca-certificates.crt
 
 volumes:
   - name: certs
-    host:
-      path: /etc/ssl
+    configMap:
+      name: ca-certs
 

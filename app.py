@@ -79,21 +79,21 @@ menu = """
 <li><a href="https://gitea">
 gitea</a></li>
 </td><td>
-Source Code Management
+<small>Source Code Management</small>
 </td></tr>
 
 <tr><td>
 <li><a href="https://drone.local">
 drone</a></li>
 </td><td>
-Continous Integration
+<small>Continous Integration</small>
 </td></tr>
 
 <tr><td>
 <li><a href="https://harbor">
 harbor</a></li>
 </td><td>
-Container Image Registdy
+<small>Container Image Registdy</small>
 </td></tr>
 
 <br>
@@ -102,14 +102,14 @@ Container Image Registdy
 <li><a href="https://jupyterhub.local">
 jupyterhub</a></li>
 </td><td>
-Interactive Notebook Server
+<small>Interactive Notebook Server</small>
 </td></tr>
 
 <tr><td>
 <li><a href="https://mlflow.local">
 mlflow</a></li>
 </td><td>
-Machine Learning Lifecycle Management
+<small>Machine Learning Lifecycle Management</small>
 </td></tr>
 
 <br>
@@ -118,14 +118,14 @@ Machine Learning Lifecycle Management
 <li><a href="https://postgres-ui.local">
 postgres-ui</a></li>
 </td><td>
-Relational Database
+<small>Relational Database</small>
 </td></tr>
 
 <tr><td>
 <li><a href="https://minio.local">
 minio</a></li>
 </td><td>
-Object Store
+<small>Object Store</small>
 </td></tr>
 
 <br>
@@ -134,14 +134,14 @@ Object Store
 <li><a href="https://bash.local">
 BASH</a></li>
 </td><td>
-In-Cluster Bourne Shell
+<small>In-Cluster Bourne Shell</small>
 </td></tr>
 
 <tr><td>
 <li><a href="https://rustpad.local">
 rustpad</a></li>
 </td><td>
-Shared Text Editor
+<small>Shared Text Editor</small>
 </td></tr>
 
 
@@ -151,10 +151,9 @@ Shared Text Editor
 <li><a href="https://grafana.local">
 grafana</a></li>
 </td><td>
-Metdics Visualization and Alerting
+<small>Metrics Visualization and Alerting</small>
 </td></tr>
 </table>
-</small>
 
 </ul>
 <a href="/ca.crt">ca</a>

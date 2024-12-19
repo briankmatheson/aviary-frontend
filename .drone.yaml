@@ -26,11 +26,11 @@ steps:
     tags:
     - latest
   volumes: 
-  - name: ca-certificates.crt
-    path: /etc/ssl/certs
+  - name: certs
+    path: /etc/ssl
 
 volumes:
-  - name: ca-certificates.crt
+  - name: certs
     host:
-      path: /etc/ssl/certs
+      path: /etc/ssl
 

@@ -1,4 +1,6 @@
 from bottle import route, run, template, static_file
+import kubernetes
+
 
 
 @route('/favicon.ico')
@@ -70,6 +72,7 @@ li a:hover {
 
 menu = """
 <body>
+<a href="/ca.crt">ca</a>
 <ul>
 
 <lh><h1>Aviary</h1></lh>
@@ -156,14 +159,19 @@ grafana</a></li>
 </table>
 
 </ul>
-<a href="/ca.crt">ca</a>
+
 </body>
 </html>
 """
 
 @route('/')
 def index():
-    return style_header, menu
+    config.load_kube_config()
+
+    v1 = client.CoreV1Api()
+    print("Listing pods with their IPs:")
+    ret = v1.list_pod_for_all_namespaces(watch=False)
+    return style_header, menu, ret.items
 
 
 def app():

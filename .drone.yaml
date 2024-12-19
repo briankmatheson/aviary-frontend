@@ -25,4 +25,12 @@ steps:
     repo: harbor:443/tmp/foo
     tags: drone
     skip_tls_verify: true
-  
+
+  volumes:
+  - name: ca-certificates.crt
+    path: /drone/src
+
+volumes:
+  - name: ca-certificates.crt
+    host:
+      path: /etc/ssl/certs

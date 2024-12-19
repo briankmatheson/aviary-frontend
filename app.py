@@ -183,6 +183,6 @@ def main_app():
     except:
         raise
     app.debug(True)
-    app.run(host='0.0.0.0', port=8080)
+    run(app=app, debug=True, host='0.0.0.0', port=8080)
 
 main_app()

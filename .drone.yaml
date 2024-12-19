@@ -17,7 +17,7 @@ steps:
   commands:
   - apt update
 - name: kaniko  
-  image: mgit/base:kaniko-executor-debug-stable
+  image: plugins/kaniko:1.10.4
   settings:
 
     username: drone 

@@ -182,7 +182,6 @@ def main_app():
         config.load_incluster_config()
     except:
         raise
-    app.debug(True)
     run(app=app, debug=True, host='0.0.0.0', port=8080)
 
 main_app()

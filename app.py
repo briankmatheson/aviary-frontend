@@ -67,7 +67,7 @@ li a:hover {
 menu = """
 <body>
 <ul>
-<lh><h1>Aviary Platform</h1></lh>
+<lh><h1>Aviary</h1></lh>
 <li><a title="Git Repo" href="https://gitea">gitea</a></li>
 <li><a title="CI" href="https://drone.local">drone</a></li>
 <li><a title="Registry" href="https://harbor">harbor</a></li>

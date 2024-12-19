@@ -19,7 +19,7 @@ steps:
 - name: kaniko  
   image: plugins/kaniko:1.10.4
   settings:
-  ` privileged: true
+    privileged: true
     username: drone 
     password: Drone1111
     repo: harbor:443/tmp/foo

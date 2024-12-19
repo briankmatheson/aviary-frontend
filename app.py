@@ -61,6 +61,7 @@ li a {
 small {
   color: gray;
   text-align: right;
+  font-size: 70%;
 }
 li a:hover {
   color: #fafaf1;

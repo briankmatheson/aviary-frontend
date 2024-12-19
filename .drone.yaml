@@ -23,7 +23,7 @@ steps:
     password: to0EaYegAenDX2KRI0cQKGfkNOuXD9kt
     repo: harbor:443/tmp/foo
     build_args: --tlsverify=true
-    tags
+    tags:
     - latest
   volumes: 
   - name: certs

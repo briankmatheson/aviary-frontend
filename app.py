@@ -100,7 +100,7 @@ Container Image Registry
 
 <td><tr>
 <li><a href="https://jupyterhub.local">
-jupyterhbu</a></li>
+jupyterhub</a></li>
 </tr><tr>
 Interactive Notebook Server
 </tr></td>

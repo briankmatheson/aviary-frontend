@@ -16,7 +16,6 @@ steps:
   image: debian
   commands:
   - apt update
-  - apt -y install python3-bottle gunicorn
 - name: kaniko  
   image: plugins/kaniko
   settings:

@@ -21,7 +21,7 @@ ul {
   margin: 16;
   padding: 16;
   overflow: hidden;
-  width: 20%;
+  width: 30%;
   background-image: linear-gradient(DarkSlateGray, #f1fef1, #fafaf1);
 }
 

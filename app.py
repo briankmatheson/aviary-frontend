@@ -21,7 +21,7 @@ ul {
   margin: 16;
   padding: 16;
   overflow: hidden;
-  width: 30%;
+  width: 20%;
   background-image: linear-gradient(DarkSlateGray, #f1fef1, #fafaf1);
 }
 
@@ -67,20 +67,88 @@ li a:hover {
 menu = """
 <body>
 <ul>
-<lh><h1>Aviary</h1></lh>
-<li><a title="Git Repo" href="https://gitea">gitea</a></li>
-<li><a title="CI" href="https://drone.local">drone</a></li>
-<li><a title="Registry" href="https://harbor">harbor</a></li>
+
+<lh><h1>Aviary Platform</h1></lh>
+
+<li><a https://gitea">
+<table><tr><td>
+gitea
+</td><td>
+Source Code Management
+</td><tr></a></li>
+
+<li><a href="https://drone.local">
+<table><tr><td>
+drone
+</td><td>
+Continous Integration
+</td><tr></a></li>
+
+<li><a href="https://harbor">
+<table><tr><td>
+harbor
+</td><td>
+Container Image Registry
+</td><tr></a></li>
+
 <hr>
-<li><a title="Interactive Notebook" href="https://jupyterhub.local">jupyterhub</a></li>
-<li><a title="Model Tracking" href="https://mlflow.local">mlflow</a></li>
+
+<li><a href="https://jupyterhub.local">
+<table><tr><td>
+jupyterhub
+</td><td>
+Interactive Notebook Server
+</td><tr></a></li>
+
+<li><a href="https://mlflow.local">
+<table><tr><td>
+mlflow
+</td><td>
+Machine Learning Lifecycle Management
+</td><tr></a></li>
+
 <hr>
-<li><a title="RDBMS" href="https://postgres-ui.local">postgres-ui</a></li>
-<li><a title="Object Store" href="https://minio.local">minio</a></li>
-<li><a title="In-Cluster Shell" href="https://bash.local">cloudshell</a></li>
-<li><a title="Shared Editor" href="https://rustpad.local">rustpad</a></li>
+
+<li><a href="https://postgres-ui.local">
+<table><tr><td>
+postgres-ui
+</td><td>
+Relational Database
+</td><tr></a></li>
+
+<li><a href="https://minio.local">
+<table><tr><td>
+minio</a></li>
+</td><td>
+Object Store
+</td><tr></a></li>
+
 <hr>
-<li><a title="Metrics and Alerting" href="https://grafana.local">grafana</a></li>
+
+<li><a href="https://bash.local">
+<table><tr><td>
+BASH
+</td><td>
+In-Cluster Bourne Shell
+</td><tr></a></li>
+
+<li><a href="https://rustpad.local">
+<table><tr><td>
+rustpad
+</td><td>
+Shared Text Editor
+</td><tr></a></li>
+
+
+<hr>
+
+<li><a href="https://grafana.local">
+<table><tr><td>
+grafana</a></li>
+</td><td>
+Metrics Visualization and Alerting
+</td><tr></a></li>
+
 </ul>
 <a href="/ca.crt">ca</a>
 </body>

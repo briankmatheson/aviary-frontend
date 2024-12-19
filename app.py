@@ -69,7 +69,7 @@ menu = """
 <ul>
 
 <lh><h1>Aviary Platform</h1></lh>
-
+<small>
 <table>
 <td><tr>
 <li><a href="https://gitea">
@@ -149,6 +149,8 @@ grafana</a></li>
 </tr><tr>
 Metrics Visualization and Alerting
 </tr></td>
+</table>
+</small>
 
 </ul>
 <a href="/ca.crt">ca</a>

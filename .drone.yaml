@@ -22,7 +22,7 @@ steps:
     username: drone 
     password: Drone1111
     registry: harbor:443
-    repo: /tmp/foo
-    tags: 0.1
+    repo: harbor:443/tmp/foo
+    tags: drone
     skip_tls_verify: true
   

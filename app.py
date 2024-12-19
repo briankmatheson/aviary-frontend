@@ -1,18 +1,18 @@
-from bottle import route, run, template, static_file
+from bottle import Bottle, route, run, template, static_file, debug
 from kubernetes import client, config
 
 
+app = Bottle()
 
-
-@route('/favicon.ico')
+@app.route('/favicon.ico')
 def favicon():
     return static_file('favicon.ico', root='./') 
 
-@route('/aviary.png')
+@app.route('/aviary.png')
 def logo():
     return static_file('aviary.png', root='./') 
 
-@route('/ca.crt')
+@app.route('/ca.crt')
 def ca():
     return static_file('ca.crt', root='./') 
 
@@ -164,7 +164,7 @@ grafana</a></li>
 </html>
 """
 
-@route('/')
+@app.route('/')
 def index():
     namespace = "default"
     #config.kube_config.load_kube_config()
@@ -182,6 +182,7 @@ def app():
         config.load_incluster_config()
     except:
         raise
-    run(host='0.0.0.0', port=8080)
+    app.debug(True)
+    app.run(host='0.0.0.0', port=8080)
 
 app()

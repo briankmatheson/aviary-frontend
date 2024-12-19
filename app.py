@@ -178,7 +178,10 @@ def index():
 
 
 def app():
-    kubernetes.config.load_incluster_config()
+    try:
+        kubernetes.config.load_incluster_config()
+    except Exception as e:
+        print("exception", e)
     run(host='0.0.0.0', port=8080)
 
 app()

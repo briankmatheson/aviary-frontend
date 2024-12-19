@@ -28,7 +28,7 @@ steps:
     - latest
   volumes: 
   - name: config.json
-    path: ~/.docker
+    path: /kaniko/.docker
 volumes:
   - name: config.json
     secret:

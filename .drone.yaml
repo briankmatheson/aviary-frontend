@@ -27,14 +27,9 @@ steps:
     tags:
     - latest
   volumes: 
-  - name: ca.crt
-    path: ~/.docker
   - name: config.json
-    path: /
+    path: ~/.docker
 volumes:
-  - name: ca.crt
-    configMap:
-      name: ca-certs
   - name: config.json
     secret:
       name: kaniko-secret

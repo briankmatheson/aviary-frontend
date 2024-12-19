@@ -177,7 +177,7 @@ def index():
     return style_header, menu, ret.items
 
 
-def app():
+def main_app():
     try:
         config.load_incluster_config()
     except:
@@ -185,4 +185,4 @@ def app():
     app.debug(True)
     app.run(host='0.0.0.0', port=8080)
 
-app()
+main_app()

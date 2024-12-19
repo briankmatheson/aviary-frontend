@@ -19,6 +19,7 @@ steps:
 - name: kaniko  
   image: plugins/kaniko
   settings:
+
     username: drone 
     password: Drone1111
     repo: harbor:443/tmp/foo
@@ -28,9 +29,12 @@ steps:
   volumes: 
   - name: ca.crt
     path: ~/.docker
-
+  - name: kaniko-secret
+    path: /secret
 volumes:
   - name: ca.crt
     configMap:
       name: ca-certs
-
+  - name: kaniko-secret
+    secret:
+      name: kaniko-secret

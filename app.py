@@ -68,16 +68,19 @@ menu = """
 <body>
 <ul>
 <lh><h1>Aviary Platform</h1></lh>
-<li><a href="https://gitea">gitea</a></li>
-<li><a href="https://drone.local">drone</a></li>
-<li><a href="https://harbor">harbor</a></li>
-<li><a href="https://jupyterhub.local">jupyterhub</a></li>
-<li><a href="https://mlflow.local">mlflow</a></li>
-<li><a href="https://postgres-ui.local">postgres-ui</a></li>
-<li><a href="https://minio.local">minio</a></li>
-<li><a href="https://bash.local">cloudshell</a></li>
-<li><a href="https://rustpad.local">rustpad</a></li>
-<li><a href="https://grafana.local">grafana</a></li>
+<li><a title="Git Repo" href="https://gitea">gitea</a></li>
+<li><a title="CI" href="https://drone.local">drone</a></li>
+<li><a title="Registry" href="https://harbor">harbor</a></li>
+<hr>
+<li><a title="Interactive Notebook" href="https://jupyterhub.local">jupyterhub</a></li>
+<li><a title="Model Tracking" href="https://mlflow.local">mlflow</a></li>
+<hr>
+<li><a title="RDBMS" href="https://postgres-ui.local">postgres-ui</a></li>
+<li><a title="Object Store" href="https://minio.local">minio</a></li>
+<li><a title="In-Cluster Shell" href="https://bash.local">cloudshell</a></li>
+<li><a title="Shared Editor" href="https://rustpad.local">rustpad</a></li>
+<hr>
+<li><a title="Metrics and Alerting" href="https://grafana.local">grafana</a></li>
 </ul>
 <a href="/ca.crt">ca</a>
 </body>

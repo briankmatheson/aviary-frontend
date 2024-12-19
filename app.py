@@ -1,5 +1,5 @@
 from bottle import route, run, template, static_file
-from kubernetes import client config
+from kubernetes import client, config
 
 
 

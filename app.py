@@ -166,11 +166,12 @@ grafana</a></li>
 
 @route('/')
 def index():
-    config.load_kube_config()
+    namespace = "default"
+    kubernetes.config.kube_config.load_kube_config()
 
-    v1 = client.CoreV1Api()
+    v1 = kubernetes.client.CoreV1Api()
     print("Listing pods with their IPs:")
-    ret = v1.list_pod_for_all_namespaces(watch=False)
+    ret = v1.list_namespaced_pod(namespace)
     return style_header, menu, ret.items
 
 

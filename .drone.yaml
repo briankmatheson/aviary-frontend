@@ -3,9 +3,6 @@ kind: pipeline
 type: kubernetes
 name: aviary-frontend
 
-clone:
-  skip_verify: true
-
 steps:
 - name: pwd
   image: debian

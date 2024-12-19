@@ -28,7 +28,7 @@ steps:
 
   volumes:
   - name: ca-certificates.crt
-    path: /drone/src
+    path: /drone/src/ca.crt
 
 volumes:
   - name: ca-certificates.crt

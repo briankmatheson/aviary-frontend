@@ -17,7 +17,7 @@ steps:
   commands:
   - apt update
 - name: kaniko  
-  image: drone/drone-kaniko:stable
+  image: harness/kaniko
   settings:
     username: drone 
     password: Drone1111

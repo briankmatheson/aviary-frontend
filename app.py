@@ -60,7 +60,7 @@ li a {
 
 small {
   color: gray;
-  text-align: right
+  text-align: right;
 }
 li a:hover {
   color: #fafaf1;
@@ -167,15 +167,19 @@ grafana</a></li>
 @app.route('/')
 def index():
     namespace = "default"
+    nodes = ""
+    
     #config.kube_config.load_kube_config()
     print("Listing pods with their IPs:")
     try:
-        v1 = client.CoreV1Api()
-        ret = v1.list_namespaced_pod(namespace)
+        api = client.CustomObjectsApi()
     except:
         raise
-    print(ret.items)
-    return style_header, menu
+    k8s_nodes = api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
+
+    for stats in k8s_nodes['items']:
+        nodes += "Node Name: %s\tCPU: %s\tMemory: %s" % (stats['metadata']['name'], stats['usage']['cpu'], stats['usage']['memory']))
+        return style_header, menu, nodes
 
 
 def main_app():

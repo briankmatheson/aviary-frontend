@@ -1,5 +1,6 @@
 from bottle import route, run, template, static_file
-import kubernetes
+from kubernetes import client config
+
 
 
 
@@ -167,10 +168,10 @@ grafana</a></li>
 @route('/')
 def index():
     namespace = "default"
-    #kubernetes.config.kube_config.load_kube_config()
+    #config.kube_config.load_kube_config()
     print("Listing pods with their IPs:")
     try:
-        v1 = kubernetes.client.CoreV1Api()
+        v1 = client.CoreV1Api()
         ret = v1.list_namespaced_pod(namespace)
     except Exception as e:
         return(e)
@@ -179,7 +180,7 @@ def index():
 
 def app():
     try:
-        kubernetes.config.load_incluster_config()
+        config.load_incluster_config()
     except Exception as e:
         print("exception", e)
     run(host='0.0.0.0', port=8080)

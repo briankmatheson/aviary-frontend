@@ -21,7 +21,7 @@ ul {
   margin: 16;
   padding: 16;
   overflow: hidden;
-  width: 20%;
+  width: 30%;
   background-image: linear-gradient(DarkSlateGray, #f1fef1, #fafaf1);
 }
 
@@ -37,7 +37,7 @@ lh {
   background-position-y: center; 
   background-image: url("aviary.png");
   background-repeat: no-repeat;
-  background-size: 70%;
+  background-size: 50%;
   background-float: right;
 }
 
@@ -55,6 +55,10 @@ li a {
   text-decoration: none;
 }
 
+small {
+  color: gray;
+  text-align: right
+}
 li a:hover {
   color: #fafaf1;
   background-color: DarkSlateGray;

@@ -168,8 +168,7 @@ grafana</a></li>
 def index():
     namespace = "default"
     #kubernetes.config.kube_config.load_kube_config()
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = kubernetes.client.CoreV1Api(kubernetes.config.load_incluster_config())
     print("Listing pods with their IPs:")
     try:
         ret = v1.list_namespaced_pod(namespace)

@@ -77,7 +77,6 @@ menu = """
 <ul>
 
 <lh><h1>Aviary</h1></lh>
-<small>
 <table>
 <tr><td>
 <li><a href="https://gitea">
@@ -173,16 +172,16 @@ def index():
     try:
         v1 = client.CoreV1Api()
         ret = v1.list_namespaced_pod(namespace)
-    except Exception as e:
-        return(e)
+    except:
+        raise
     return style_header, menu, ret.items
 
 
 def app():
     try:
         config.load_incluster_config()
-    except Exception as e:
-        print("exception", e)
+    except:
+        raise
     run(host='0.0.0.0', port=8080)
 
 app()

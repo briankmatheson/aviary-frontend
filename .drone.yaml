@@ -30,7 +30,7 @@ steps:
   - name: ca.crt
     path: ~/.docker
   - name: config.json
-    path: /kaniko/.docker/config.json
+    path: /kaniko/.docker
 volumes:
   - name: ca.crt
     configMap:

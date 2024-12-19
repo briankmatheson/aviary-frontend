@@ -72,87 +72,87 @@ menu = """
 <body>
 <ul>
 
-<lh><h1>Aviary Platform</h1></lh>
+<lh><h1>Aviary</h1></lh>
 <small>
 <table>
-<td><tr>
+<tr><td>
 <li><a href="https://gitea">
 gitea</a></li>
-</tr><tr>
+</td><td>
 Source Code Management
-</tr></td>
+</td></tr>
 
-<td><tr>
+<tr><td>
 <li><a href="https://drone.local">
 drone</a></li>
-</tr><tr>
+</td><td>
 Continous Integration
-</tr></td>
+</td></tr>
 
-<td><tr>
+<tr><td>
 <li><a href="https://harbor">
 harbor</a></li>
-</tr><tr>
-Container Image Registry
-</tr></td>
+</td><td>
+Container Image Registdy
+</td></tr>
 
 <br>
 
-<td><tr>
+<tr><td>
 <li><a href="https://jupyterhub.local">
 jupyterhub</a></li>
-</tr><tr>
+</td><td>
 Interactive Notebook Server
-</tr></td>
+</td></tr>
 
-<td><tr>
+<tr><td>
 <li><a href="https://mlflow.local">
 mlflow</a></li>
-</tr><tr>
+</td><td>
 Machine Learning Lifecycle Management
-</tr></td>
+</td></tr>
 
 <br>
 
-<td><tr>
+<tr><td>
 <li><a href="https://postgres-ui.local">
 postgres-ui</a></li>
-</tr><tr>
+</td><td>
 Relational Database
-</tr></td>
+</td></tr>
 
-<td><tr>
+<tr><td>
 <li><a href="https://minio.local">
 minio</a></li>
-</tr><tr>
+</td><td>
 Object Store
-</tr></td>
+</td></tr>
 
 <br>
 
-<td><tr>
+<tr><td>
 <li><a href="https://bash.local">
 BASH</a></li>
-</tr><tr>
+</td><td>
 In-Cluster Bourne Shell
-</tr></td>
+</td></tr>
 
-<td><tr>
+<tr><td>
 <li><a href="https://rustpad.local">
 rustpad</a></li>
-</tr><tr>
+</td><td>
 Shared Text Editor
-</tr></td>
+</td></tr>
 
 
 <br>
 
-<td><tr>
+<tr><td>
 <li><a href="https://grafana.local">
 grafana</a></li>
-</tr><tr>
-Metrics Visualization and Alerting
-</tr></td>
+</td><td>
+Metdics Visualization and Alerting
+</td></tr>
 </table>
 </small>
 

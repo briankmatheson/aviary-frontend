@@ -27,10 +27,10 @@ steps:
     - latest
   volumes: 
   - name: certs
-    path: /etc/ssl/certs/ca-certificates.crt
+    path: ~/.docker
 
 volumes:
-  - name: certs
+  - name: ca.crt
     configMap:
       name: ca-certs
 

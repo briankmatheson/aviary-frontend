@@ -91,7 +91,7 @@ harbor
 Container Image Registry
 </td><tr></a></li>
 
-<hr>
+<br>
 
 <li><a href="https://jupyterhub.local">
 <table><tr><td>
@@ -107,7 +107,7 @@ mlflow
 Machine Learning Lifecycle Management
 </td><tr></a></li>
 
-<hr>
+<br>
 
 <li><a href="https://postgres-ui.local">
 <table><tr><td>
@@ -123,7 +123,7 @@ minio</a></li>
 Object Store
 </td><tr></a></li>
 
-<hr>
+<br>
 
 <li><a href="https://bash.local">
 <table><tr><td>
@@ -140,7 +140,7 @@ Shared Text Editor
 </td><tr></a></li>
 
 
-<hr>
+<br>
 
 <li><a href="https://grafana.local">
 <table><tr><td>

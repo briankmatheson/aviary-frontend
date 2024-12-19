@@ -26,11 +26,11 @@ steps:
     tags: latest
     skip_tls_verify: true
 
-#   volumes:
-#   - name: ca-certificates.crt
-#     path: /drone/src/ca.crt
+  volumes:
+  - name: ca-certificates.crt
+    path: /drone/src/ca.crt
 
-# volumes:
-#   - name: ca-certificates.crt
-#     host:
-#       path: /etc/ssl/certs
+volumes:
+  - name: ca-certificates.crt
+    host:
+      path: /etc/ssl/certs

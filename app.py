@@ -167,8 +167,8 @@ grafana</a></li>
 @route('/')
 def index():
     namespace = "default"
-    kubernetes.config.kube_config.load_kube_config()
-
+    #kubernetes.config.kube_config.load_kube_config()
+    kubernetes.config.incluster_config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
     print("Listing pods with their IPs:")
     ret = v1.list_namespaced_pod(namespace)

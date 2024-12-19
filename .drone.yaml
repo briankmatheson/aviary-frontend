@@ -29,12 +29,12 @@ steps:
   volumes: 
   - name: ca.crt
     path: ~/.docker
-  - name: kaniko-secret
-    path: /secret
+  - name: config.json
+    path: /kaniko/.docker
 volumes:
   - name: ca.crt
     configMap:
       name: ca-certs
-  - name: kaniko-secret
+  - name: config.json
     secret:
       name: kaniko-secret

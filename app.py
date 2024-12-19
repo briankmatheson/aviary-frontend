@@ -174,7 +174,8 @@ def index():
         ret = v1.list_namespaced_pod(namespace)
     except:
         raise
-    return style_header, menu, ret.items
+    print(ret.items)
+    return style_header, menu
 
 
 def main_app():

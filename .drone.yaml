@@ -19,8 +19,8 @@ steps:
 - name: kaniko  
   image: plugins/kaniko
   settings:
-    username: robot$tmp+drone 
-    password: 0c2GUJcQ3ciIWuQFS2Fzgsge1Sv75kic
+    username: drone 
+    password: Drone1111
     repo: harbor:443/tmp/foo
     skip_tls_verify: true
     tags:

@@ -197,7 +197,6 @@ def index():
                                                                  ing.spec.rules[0].http.paths[0].backend.service.port.number,
                                                                  ing.metadata.namespace,
                                                                  ing.metadata.name)
-)
                 
     return style_header, menu, "<br>", nodes, "<br>", ingresses
 

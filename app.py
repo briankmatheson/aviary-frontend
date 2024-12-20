@@ -24,14 +24,14 @@ ul {
   margin: 16;
   padding: 16;
   overflow: hidden;
-  width: 50%;
+  width: 40%;
   background-image: linear-gradient(DarkSlateGray, #f1fef1, #fafaf1);
 }
 
 lh {
   text-align: center;
   height: 42%;
-  width: 50%;
+  width: 90%;
   color: #fafaf1;
   display: block;
   float: center;
@@ -44,16 +44,10 @@ lh {
   background-float: right;
 }
 
-ul li {
-  width: 40%;
-}
-
 li a {
   display: block;
   color: Blue;
   text-align: left;
-  padding: 8px;
-  width: 90%;
   text-decoration: none;
 }
 
@@ -61,13 +55,12 @@ td small {
   color: gray;
   text-align: right;
   float: right;
-  font-size: 60%;
+  font-size: 70%;
 
 }
 li a:hover {
   color: #fafaf1;
   background-color: DarkSlateGray;
-  margin-right: 10px;
 }
 </style>
 </head>
@@ -180,18 +173,21 @@ def index():
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
 
     for stats in k8s_nodes['items']:
-        nodes += "Node Name: %s\tCPU: %s\tMemory: %s\n<br>" % (stats['metadata']['name'],
-                                                         stats['usage']['cpu'],
-                                                         stats['usage']['memory'])
-
+        nodes += "Node Name: %s\tCPU: %s/%s\tMemory: %s/%s\n<br>" % (stats['metadata']['name'],
+                                                               stats['usage']['cpu'],
+                                                               stats['capacity']['cpu'],
+                                                               stats['usage']['memory'],
+                                                               stats['capacity']['memory'])
+        
     for ing in k8s_ing.items:
-        ingresses += "Ingress: %s -> %s:%d (%s / %s)<br>\n" % (ing.spec.rules[0].host,
-                                                                 ing.spec.rules[0].http.paths[0].backend.service.name,
-                                                                 ing.spec.rules[0].http.paths[0].backend.service.port.number,
-                                                                 ing.metadata.namespace,
-                                                                 ing.metadata.name)
+        ingresses += "Ingress: %s %s -> %s:%d (%s / %s)<br>\n" % (ing.metadata.address,
+                                                                  ing.spec.rules[0].host,
+                                                                  ing.spec.rules[0].http.paths[0].backend.service.name,
+                                                                  ing.spec.rules[0].http.paths[0].backend.service.port.number,
+                                                                  ing.metadata.namespace,
+                                                                  ing.metadata.name)
                 
-    return style_header, menu, "<br>", nodes, "<br>", ingresses, "<hr>"
+    return style_header, menu, "<br>", "<small>", nodes, "<br>", ingresses, "</small><hr></body></html>"
 
 
 def main_app():

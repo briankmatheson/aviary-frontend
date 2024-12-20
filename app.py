@@ -58,10 +58,12 @@ li a {
   text-decoration: none;
 }
 
-small {
+li small {
   color: gray;
   text-align: right;
-  font-size: 70%;
+  float: right;
+  font-size: 60%;
+
 }
 li a:hover {
   color: #fafaf1;

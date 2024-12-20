@@ -24,13 +24,13 @@ ul {
   margin: 16;
   padding: 16;
   overflow: hidden;
-  width: 30%;
+  width: 50%;
   background-image: linear-gradient(DarkSlateGray, #f1fef1, #fafaf1);
 }
 
 lh {
   text-align: center;
-  height: 42%;
+  height: 36%;
   width: 90%;
   color: #fafaf1;
   display: block;
@@ -40,12 +40,12 @@ lh {
   background-position-y: center; 
   background-image: url("aviary.png");
   background-repeat: no-repeat;
-  background-size: 50%;
+  background-size: 65%;
   background-float: right;
 }
 
 li {
-  width: 100%;
+  width: 40%;
   float: right;
 }
 
@@ -58,7 +58,7 @@ li a {
   text-decoration: none;
 }
 
-li small {
+td small {
   color: gray;
   text-align: right;
   float: right;

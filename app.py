@@ -1,6 +1,7 @@
 from bottle import Bottle, route, run, template, static_file, debug
 from kubernetes import client, config
 import locale
+import re
 
 app = Bottle()
 
@@ -163,6 +164,7 @@ def index():
     
     #config.kube_config.load_kube_config()
     print("Listing pods with their IPs:")
+
     try:
         k8s_api = client.CoreV1Api()
         metrics_api = client.CustomObjectsApi()
@@ -174,19 +176,22 @@ def index():
     k8s_nodes = k8s_api.list_node()
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
 
-    for i in range(0, len(k8s_nodes.items)):
-        stats  = k8s_metrics.items[i]
-        node = k8s_nodes.items[i]
 
-        cpu = int(stats.usage.cpu) / int(node.status.capacty.cpu)
-        mem = int(stats['usage']['memory']) / int(node['status']['allocatable'])
+
+    for i in range(0, len(k8s_nodes.items)):
+        print(k8s_metrics, k8s_nodes)
+        stats  = k8s_metrics['items'][0]
+        node = k8s_nodes.items[0]
+
+        cpu = int(re.sub(r'\D', '', stats['usage']['cpu'])) / int(re.sub(r'\D', '', node.status.capacity['cpu']))/1024/1024/1024 * 100
+        mem = int(re.sub(r'\D', '', stats['usage']['memory'])) / int(re.sub(r'\D', '', node.status.allocatable['memory'])) * 100
         
-        nodes += "<tr><td>Node Name:</td><td>%s\tCPU::</td><td>%s:</td><td>Memory: %s:</td></tr>" % (stats['metadata']['name'],
+        nodes += "<tr><td>Node Name:</td><td>%s\tCPU::</td><td>%3d %%</td><td>Memory: %3d %%</td></tr>" % (stats['metadata']['name'],
                                                                                                      cpu,
                                                                                                      mem)
 
     for ing in k8s_ing.items:
-        ingresses += "<tr><td>%s</td><td>%s</td><td># %s:%d:</td><td>(%s / %s)</td></tr>" % (ing.status.load_balancer.ingress[0].ip,
+        ingresses += "<tr><td>%s</td><td>%s</td><td># %s:%d</td><td>(%s / %s)</td></tr>" % (ing.status.load_balancer.ingress[0].ip,
                                                                                              
                                                                                              ing.spec.rules[0].host,
                                                                                              ing.spec.rules[0].http.paths[0].backend.service.name,
@@ -204,7 +209,9 @@ def main_app():
     try:
         config.load_incluster_config()
     except:
-        print("Error: can\'t load config\n")
+        print("Error: can\'t load incluster config, trying kubeconfig\n")
+        config.kube_config.load_kube_config()
+
     run(app=app, debug=True, host='0.0.0.0', port=8080)
 
 main_app()

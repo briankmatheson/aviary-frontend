@@ -81,9 +81,9 @@ li a:hover {
 menu = """
 <body>
 <a href="/ca.crt">ca</a>
-<ul>
-<lh><h1>Aviary</h1><\lh>
 <table>
+<ul>
+<th><lh><h1>Aviary</h1></lh></th>
 <tr><td>
 <li><a href="https://gitea">
 gitea</a></li>

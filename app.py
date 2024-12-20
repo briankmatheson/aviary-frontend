@@ -188,7 +188,9 @@ def index():
     k8s_ing = net_api.list_ingress_for_all_namespaces()
 
     for stats in k8s_nodes['items']:
-        nodes += "Node Name: %s\tCPU: %s\tMemory: %s" % (stats['metadata']['name'], stats['usage']['cpu'] / 1024^3, stats['usage']['memory'] / 1024^3 )
+        nodes += "Node Name: %s\tCPU: %s\tMemory: %s" % (stats['metadata']['name'],
+                                                         stats['usage']['cpu'],
+                                                         stats['usage']['memory'])
 
     for item in k8s_ing['items']:
         ing += item

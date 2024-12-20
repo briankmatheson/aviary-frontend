@@ -192,7 +192,7 @@ def index():
                                                          stats['usage']['memory'])
 
     for ing in k8s_ing.items:
-        ingresses += "Name: %s / %s: %s -> %s<br>", ing.metadata.namespace, ing.metadata.name, ing.spec.rules[0].http.paths[0].path, ing.spec.rules[0].http.paths[0].service.name
+        ingresses += "Name: %s / %s: %s -> %s<br>", ing.metadata.namespace, ing.metadata.name, ing.spec.rules[0].http.paths[0].path, ing.spec.rules[0].http.paths[0].backend.service.name
                 
     return style_header, menu, "<br>", nodes, ingresses
 

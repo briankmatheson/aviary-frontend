@@ -164,23 +164,32 @@ def index():
     #config.kube_config.load_kube_config()
     print("Listing pods with their IPs:")
     try:
-        api = client.CustomObjectsApi()
+        k8s_api = client.CoreV1Api()
+        metrics_api = client.CustomObjectsApi()
         net_api = client.NetworkingV1Api()
     except:
         raise
 
-    k8s_nodes = api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
+    k8s_nodes = k8s_api.list_node()
+    k8s_metrics = metrics_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
 
-    for stats in k8s_nodes['items']:
-        nodes += "Node Name: %s\tCPU: %s/%s\tMemory: %s/%s\n<br>" % (stats['metadata']['name'],
-                                                               stats['usage']['cpu'],
-                                                               stats['capacity']['cpu'],
-                                                               stats['usage']['memory'],
-                                                               stats['capacity']['memory'])
+
+
+    for node in nodes.items:
+        print(f"Node: {node.metadata.name}")
+        print("Capacity:")
+        for resource_name, quantity in node.status.capacity.items():
+            print(f"  {resource_name}: {quantity}")
+
+    
+    for stats in k8s_metrics['items']:
+        nodes += "Node Name: %s\tCPU: %s\tMemory: %s\n<br>" % (stats['metadata']['name'],
+                                                                     stats['usage']['cpu'],
+                                                                     stats['usage']['memory'])
         
     for ing in k8s_ing.items:
-        ingresses += "Ingress: %s %s -> %s:%d (%s / %s)<br>\n" % (ing.metadata.address,
+        ingresses += "Ingress: %s\t%s\t->\t%s:%d\t(%s / %s)<br>\n" % (ing.metadata.address,
                                                                   ing.spec.rules[0].host,
                                                                   ing.spec.rules[0].http.paths[0].backend.service.name,
                                                                   ing.spec.rules[0].http.paths[0].backend.service.port.number,

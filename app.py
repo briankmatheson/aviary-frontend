@@ -171,7 +171,7 @@ def index():
         raise
 
     k8s_metrics = metrics_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
-    k8s_nodes = k8s_api.list_nodes()
+    k8s_nodes = k8s_api.list_node()
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
 
     for i in range(0, k8s_nodes.len()):

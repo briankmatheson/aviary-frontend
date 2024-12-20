@@ -158,8 +158,8 @@ grafana</a></li>
 @app.route('/')
 def index():
     namespace = "default"
-    nodes = ""
-    ingresses = ""
+    nodes = "<table>"
+    ingresses = "<table>"
     
     #config.kube_config.load_kube_config()
     print("Listing pods with their IPs:")
@@ -174,19 +174,22 @@ def index():
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
 
     for stats in k8s_metrics['items']:
-        nodes += "Node Name: %s\tCPU: %s\tMemory: %s\n<br>" % (stats['metadata']['name'],
+        nodes += "<tr><td>Node Name:</td><td>%s\tCPU::</td><td>%s:</td><td>Memory: %s:</td></tr>" % (stats['metadata']['name'],
                                                                stats['usage']['cpu'],
                                                                stats['usage']['memory'])
         
     for ing in k8s_ing.items:
-        ingresses += "Ingress: %s\t%s\t->\t%s:%d\t(%s / %s)<br>\n" % (ing.status.load_balancer.ingress[0].ip,
+        ingresses += "<tr><td>Ingress::</td><td>%s:</td><td>%s:</td><td>->:</td><td>%s:%d:</td><td>(%s / %s):</td></tr>" % (ing.status.load_balancer.ingress[0].ip,
                                                                       ing.spec.rules[0].host,
                                                                       ing.spec.rules[0].http.paths[0].backend.service.name,
                                                                       ing.spec.rules[0].http.paths[0].backend.service.port.number,
                                                                       ing.metadata.namespace,
                                                                       ing.metadata.name)
                 
-    return style_header, menu, "<br>", "<pre>", nodes, "<br>", ingresses, "</pre><hr></body></html>"
+    nodes += "</table>"
+    ingresses += "</table>"
+
+    return style_header, menu, "<br>", nodes, "<br>", ingresses, "<hr></body></html>"
 
 
 def main_app():

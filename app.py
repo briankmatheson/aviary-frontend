@@ -179,8 +179,8 @@ def index():
 
 
     for i in range(0, len(k8s_nodes.items)):
-        stats  = k8s_metrics['items'][0]
-        node = k8s_nodes.items[0]
+        stats  = k8s_metrics['items'][i]
+        node = k8s_nodes.items[i]
 
         cpu = int(re.sub(r'\D', '', stats['usage']['cpu'])) / int(re.sub(r'\D', '', node.status.capacity['cpu']))/1024/1024/1024 * 100
         mem = int(re.sub(r'\D', '', stats['usage']['memory'])) / int(re.sub(r'\D', '', node.status.allocatable['memory'])) * 100

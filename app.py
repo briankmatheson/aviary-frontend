@@ -171,21 +171,25 @@ def index():
         raise
 
     k8s_metrics = metrics_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
+    k8s_nodes = k8s_api.list_nodes()
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
 
-    for stats in k8s_metrics['items']:
+    for i 0 .. k8s_nodes.len():
+        node = k8s_nodes[i]
+        stats  = k8s_ing[i]
         nodes += "<tr><td>Node Name:</td><td>%s\tCPU::</td><td>%s:</td><td>Memory: %s:</td></tr>" % (stats['metadata']['name'],
-                                                               stats['usage']['cpu'],
-                                                               stats['usage']['memory'])
+                                                               stats['usage']['cpu'] / node['status']['capacity']['cpu'],
+                                                               stats['usage']['memory'] / node['status']['allocatable'])
         
     for ing in k8s_ing.items:
         ingresses += "<tr><td>%s</td><td>%s</td><td># %s:%d:</td><td>(%s / %s)</td></tr>" % (ing.status.load_balancer.ingress[0].ip,
-                                                                      ing.spec.rules[0].host,
-                                                                      ing.spec.rules[0].http.paths[0].backend.service.name,
-                                                                      ing.spec.rules[0].http.paths[0].backend.service.port.number,
-                                                                      ing.metadata.namespace,
-                                                                      ing.metadata.name)
-                
+                                                                                             
+                                                                                             ing.spec.rules[0].host,
+                                                                                             ing.spec.rules[0].http.paths[0].backend.service.name,
+                                                                                             ing.spec.rules[0].http.paths[0].backend.service.port.number,
+                                                                                             ing.metadata.namespace,
+                                                                                             ing.metadata.name)
+    
     nodes += "</table>"
     ingresses += "</table>"
 

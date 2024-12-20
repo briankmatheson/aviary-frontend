@@ -19,7 +19,7 @@ def ca():
 style_header = """
 <head><title>Aviary Platform</title>
 <style>
-ul {
+table {
   list-style-type: none;
   margin: 16;
   padding: 16;
@@ -28,7 +28,7 @@ ul {
   background-image: linear-gradient(DarkSlateGray, #f1fef1, #fafaf1);
 }
 
-lh {
+th {
   text-align: center;
   height: 42%;
   width: 90%;
@@ -53,7 +53,7 @@ table td {
   width: 40%;
 }
 
-li a {
+td a {
   display: block;
   color: Blue;
   text-align: left;
@@ -69,7 +69,7 @@ td small {
   font-size: 60%;
 
 }
-li a:hover {
+td a:hover {
   color: #fafaf1;
   background-color: DarkSlateGray;
   margin-right: 10px;
@@ -81,7 +81,6 @@ li a:hover {
 menu = """
 <body>
 <a href="/ca.crt">ca</a>
-<table>
 <ul>
 <th><lh><h1>Aviary</h1></lh></th>
 <tr><td>
@@ -188,12 +187,11 @@ def index():
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
 
     for stats in k8s_nodes['items']:
-        nodes += "Node Name: %s\tCPU: %s\tMemory: %s\n" % (stats['metadata']['name'],
+        nodes += "Node Name: %s\tCPU: %s\tMemory: %s\n<br>" % (stats['metadata']['name'],
                                                          stats['usage']['cpu'],
                                                          stats['usage']['memory'])
 
-    print(k8s_ing)
-    return style_header, menu, nodes, ing
+    return style_header, menu, nodes, k8s_ing
 
 
 def main_app():

@@ -31,7 +31,7 @@ ul {
 lh {
   text-align: center;
   height: 42%;
-  width: 90%;
+  width: 50%;
   color: #fafaf1;
   display: block;
   float: center;
@@ -42,11 +42,6 @@ lh {
   background-repeat: no-repeat;
   background-size: 55%;
   background-float: right;
-}
-
-ul {
-  width: 90%;
-  float: right;
 }
 
 ul li {

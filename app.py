@@ -179,7 +179,7 @@ def index():
                                                                stats['usage']['memory'])
         
     for ing in k8s_ing.items:
-        ingresses += "<tr><td>Ingress::</td><td>%s:</td><td>%s:</td><td>->:</td><td>%s:%d:</td><td>(%s / %s):</td></tr>" % (ing.status.load_balancer.ingress[0].ip,
+        ingresses += "<tr><td>Ingress::</td><td>%s:</td><td>%s</td><td>%s:%d:</td><td>(%s / %s)</td></tr>" % (ing.status.load_balancer.ingress[0].ip,
                                                                       ing.spec.rules[0].host,
                                                                       ing.spec.rules[0].http.paths[0].backend.service.name,
                                                                       ing.spec.rules[0].http.paths[0].backend.service.port.number,

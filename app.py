@@ -44,9 +44,13 @@ lh {
   background-float: right;
 }
 
-li {
-  width: 40%;
+table {
+  width: 90%;
   float: right;
+}
+
+table td {
+  width: 40%;
 }
 
 li a {

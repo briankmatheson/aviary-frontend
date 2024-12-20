@@ -190,7 +190,7 @@ def index():
         nodes += "Node Name: %s\tCPU: %s\tMemory: %s\n<br>" % (stats['metadata']['name'],
                                                          stats['usage']['cpu'],
                                                          stats['usage']['memory'])
-    for ing in k8s_ing:
+    for ing in k8s_ing.items:
         ingresses += "Name: {ing.metadata.name} <br>"
                 
     return style_header, menu, "<br>", nodes, ingresses

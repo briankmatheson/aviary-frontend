@@ -28,7 +28,7 @@ table {
   background-image: linear-gradient(DarkSlateGray, #f1fef1, #fafaf1);
 }
 
-th {
+lh {
   text-align: center;
   height: 42%;
   width: 90%;
@@ -44,16 +44,16 @@ th {
   background-float: right;
 }
 
-table {
+ul {
   width: 90%;
   float: right;
 }
 
-table td {
+ul li {
   width: 40%;
 }
 
-td a {
+li a {
   display: block;
   color: Blue;
   text-align: left;
@@ -69,7 +69,7 @@ td small {
   font-size: 60%;
 
 }
-td a:hover {
+li a:hover {
   color: #fafaf1;
   background-color: DarkSlateGray;
   margin-right: 10px;
@@ -196,9 +196,9 @@ def index():
                                                            ing.metadata.name,
                                                            ing.spec.rules[0].host,
                                                            ing.spec.rules[0].http.paths[0].backend.service.name,
-                                                           ing.spec.rules[0].http.paths[0].backend.service.port.number,
+                                                           ing.spec.rules[0].http.paths[0].backend.service.port.number)
                 
-    return style_header, menu, "<br>", nodes, ingresses
+    return style_header, menu, "<br>", nodes, "<br>", ingresses
 
 
 def main_app():

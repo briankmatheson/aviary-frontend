@@ -12,10 +12,10 @@ steps:
   commands:
   - pwd
   - ls
-- name: build
-  image: debian
-  commands:
-  - apt update
+
+
+
+
 - name: kaniko  
   image: harness/kaniko
   settings:

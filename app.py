@@ -185,7 +185,7 @@ def index():
         cpu = int(re.sub(r'\D', '', stats['usage']['cpu'])) / int(re.sub(r'\D', '', node.status.capacity['cpu']))/1024/1024/1024 * 100
         mem = int(re.sub(r'\D', '', stats['usage']['memory'])) / int(re.sub(r'\D', '', node.status.allocatable['memory'])) * 100
         
-        nodes += "<tr><td>Node Name:</td><td>%s\tCPU::</td><td>%3d%%</td><td>Memory: %3d%%</td></tr>" % (stats['metadata']['name'],
+        nodes += "<tr><td>Node Name: %s</td><td>CPU: %3d%%</td><td>Memory: %3d%%</td></tr>" % (stats['metadata']['name'],
                                                                                                      cpu,
                                                                                                      mem)
     for ing in k8s_ing.items:

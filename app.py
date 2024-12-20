@@ -178,7 +178,7 @@ def index():
         stats  = k8s_metrics.items[i]
         node = k8s_nodes.items[i]
 
-        cpu = int(stats['usage']['cpu']) / int(node['status']['capacity']['cpu'])
+        cpu = int(stats.usage.cpu) / int(node.status.capacty.cpu)
         mem = int(stats['usage']['memory']) / int(node['status']['allocatable'])
         
         nodes += "<tr><td>Node Name:</td><td>%s\tCPU::</td><td>%s:</td><td>Memory: %s:</td></tr>" % (stats['metadata']['name'],
@@ -204,7 +204,7 @@ def main_app():
     try:
         config.load_incluster_config()
     except:
-        raise
+        print("Error: can\'t load config\n")
     run(app=app, debug=True, host='0.0.0.0', port=8080)
 
 main_app()

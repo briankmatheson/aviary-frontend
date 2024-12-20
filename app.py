@@ -81,8 +81,10 @@ li a:hover {
 menu = """
 <body>
 <a href="/ca.crt">ca</a>
-<h1>Aviary</h1>
 <ul>
+<lh><h1>Aviary</h1>
+<br>
+<\lh>
 <table>
 <tr><td>
 <li><a href="https://gitea">
@@ -188,7 +190,7 @@ def index():
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
 
     for stats in k8s_nodes['items']:
-        nodes += "Node Name: %s\tCPU: %s\tMemory: %s" % (stats['metadata']['name'],
+        nodes += "Node Name: %s\tCPU: %s\tMemory: %s\n" % (stats['metadata']['name'],
                                                          stats['usage']['cpu'],
                                                          stats['usage']['memory'])
 

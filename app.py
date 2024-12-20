@@ -160,7 +160,7 @@ grafana</a></li>
 def index():
     namespace = "default"
     nodes = "<table>"
-    ingresses = "<table>"
+    ingresses = '<pre><small><p>---BEGIN /etc/hosts---</p><table style="font-size:65%">'
     
     #config.kube_config.load_kube_config()
     print("Listing pods with their IPs:")
@@ -179,19 +179,17 @@ def index():
 
 
     for i in range(0, len(k8s_nodes.items)):
-        print(k8s_metrics, k8s_nodes)
         stats  = k8s_metrics['items'][0]
         node = k8s_nodes.items[0]
 
         cpu = int(re.sub(r'\D', '', stats['usage']['cpu'])) / int(re.sub(r'\D', '', node.status.capacity['cpu']))/1024/1024/1024 * 100
         mem = int(re.sub(r'\D', '', stats['usage']['memory'])) / int(re.sub(r'\D', '', node.status.allocatable['memory'])) * 100
         
-        nodes += "<tr><td>Node Name:</td><td>%s\tCPU::</td><td>%3d %%</td><td>Memory: %3d %%</td></tr>" % (stats['metadata']['name'],
+        nodes += "<tr><td>Node Name:</td><td>%s\tCPU::</td><td>%3d%%</td><td>Memory: %3d%%</td></tr>" % (stats['metadata']['name'],
                                                                                                      cpu,
                                                                                                      mem)
-
     for ing in k8s_ing.items:
-        ingresses += "<tr><td>%s</td><td>%s</td><td># %s:%d</td><td>(%s / %s)</td></tr>" % (ing.status.load_balancer.ingress[0].ip,
+        ingresses += "<tr><td>%s\t</td><td>%s</td><td># %s:%d</td><td>(%s / %s)</td></tr>" % (ing.status.load_balancer.ingress[0].ip,
                                                                                              
                                                                                              ing.spec.rules[0].host,
                                                                                              ing.spec.rules[0].http.paths[0].backend.service.name,
@@ -200,7 +198,7 @@ def index():
                                                                                              ing.metadata.name)
     
     nodes += "</table>"
-    ingresses += "</table>"
+    ingresses += "</pre><br></table><p>---END---</p></small>"
 
     return style_header, menu, "<br>", nodes, "<br>", ingresses, "<hr></body></html>"
 

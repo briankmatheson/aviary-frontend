@@ -1,9 +1,12 @@
-all: build 
+all: commit push build rollout
 
+commit:
+	git commit -am.
+
+push:
+	git push
 
 build:
-	git commit -am.
-	git push
 	drone build create bmath/aviary-frontend
 	sleep 6
 	watch -q5 drone build info bmath/aviary-frontend

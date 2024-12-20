@@ -19,7 +19,7 @@ def ca():
 style_header = """
 <head><title>Aviary Platform</title>
 <style>
-table {
+ul {
   list-style-type: none;
   margin: 16;
   padding: 16;

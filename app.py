@@ -192,7 +192,8 @@ def index():
                                                          stats['usage']['memory'])
 
     for ing in k8s_ing.items:
-        ingresses += "Ingress: %s / %s: %s<br>\n", ing.metadata.namespace, ing.metadata.name
+        ingresses += "Ingress: %s / %s:<br>\n" % (ing.metadata.namespace,
+                                                     ing.metadata.name)
                 
     return style_header, menu, "<br>", nodes, ingresses
 

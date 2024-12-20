@@ -173,7 +173,7 @@ grafana</a></li>
 def index():
     namespace = "default"
     nodes = ""
-    ing = ""
+    ingresses = ""
     
     #config.kube_config.load_kube_config()
     print("Listing pods with their IPs:")
@@ -190,8 +190,10 @@ def index():
         nodes += "Node Name: %s\tCPU: %s\tMemory: %s\n<br>" % (stats['metadata']['name'],
                                                          stats['usage']['cpu'],
                                                          stats['usage']['memory'])
-
-    return style_header, menu, nodes, k8s_ing
+    for ing in k8s_ing:
+        ingresses += "Name: {ing.metadata.name} <br>"
+                
+    return style_header, menu, "<br>", nodes, ingresses
 
 
 def main_app():

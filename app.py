@@ -1,7 +1,8 @@
 from bottle import Bottle, route, run, template, static_file, debug
 from kubernetes import client, config
+import locale
 
-
+locale.setlocale(locale.LC_ALL, 'en_US')
 app = Bottle()
 
 @app.route('/favicon.ico')
@@ -177,10 +178,14 @@ def index():
     for i 0 .. k8s_nodes.len():
         node = k8s_nodes[i]
         stats  = k8s_ing[i]
-        nodes += "<tr><td>Node Name:</td><td>%s\tCPU::</td><td>%s:</td><td>Memory: %s:</td></tr>" % (stats['metadata']['name'],
-                                                               stats['usage']['cpu'] / node['status']['capacity']['cpu'],
-                                                               stats['usage']['memory'] / node['status']['allocatable'])
+
+        cpu = int(stats['usage']['cpu']) / int(node['status']['capacity']['cpu'])
+        mem = int(stats['usage']['memory']) / int(node['status']['allocatable'])
         
+        nodes += "<tr><td>Node Name:</td><td>%s\tCPU::</td><td>%s:</td><td>Memory: %s:</td></tr>" % (stats['metadata']['name'],
+                                                                                                     cpu,
+                                                                                                     mem)
+
     for ing in k8s_ing.items:
         ingresses += "<tr><td>%s</td><td>%s</td><td># %s:%d:</td><td>(%s / %s)</td></tr>" % (ing.status.load_balancer.ingress[0].ip,
                                                                                              

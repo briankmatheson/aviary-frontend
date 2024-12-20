@@ -175,8 +175,8 @@ def index():
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
 
     for i in range(0, len(k8s_nodes.items)):
+        stats  = k8s_metrics.items[i]
         node = k8s_nodes.items[i]
-        stats  = k8s_ing.items[i]
 
         cpu = int(stats['usage']['cpu']) / int(node['status']['capacity']['cpu'])
         mem = int(stats['usage']['memory']) / int(node['status']['allocatable'])

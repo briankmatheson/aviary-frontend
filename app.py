@@ -191,10 +191,6 @@ def index():
                                                          stats['usage']['cpu'],
                                                          stats['usage']['memory'])
 
-        if ingress.spec.rules:
-            for rule in ingress.spec.rules:
-                print(f"  Host: {rule.host}")
-                
     for ing in k8s_ing.items:
         ingresses += "Name: %s / %s: %s<br>", ing.metadata.namespace, ing.metadata.name, ing.spec.rules[0].host
                 

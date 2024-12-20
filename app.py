@@ -81,8 +81,9 @@ li a:hover {
 menu = """
 <body>
 <a href="/ca.crt">ca</a>
-<ul><table>
-<th><lh><h1>Aviary</h1></lh></th>
+<ul>
+<lh><h1>Aviary</h1></lh>
+<table>
 <tr><td>
 <li><a href="https://gitea">
 gitea</a></li>
@@ -162,11 +163,8 @@ grafana</a></li>
 <small>Metrics Visualization and Alerting</small>
 </td></tr>
 </table>
-
 </ul>
 
-</body>
-</html>
 """
 
 @app.route('/')
@@ -198,7 +196,7 @@ def index():
                                                                  ing.metadata.namespace,
                                                                  ing.metadata.name)
                 
-    return style_header, menu, "<br>", nodes, "<br>", ingresses
+    return style_header, menu, "<br>", nodes, "<br>", ingresses, "<hr>"
 
 
 def main_app():

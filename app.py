@@ -185,7 +185,7 @@ def index():
         raise
 
     k8s_nodes = api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
-    k8s_ing = list_ingress_for_all_namespaces()
+    k8s_ing = net_api.list_ingress_for_all_namespaces()
 
     for stats in k8s_nodes['items']:
         nodes += "Node Name: %s\tCPU: %s\tMemory: %s" % (stats['metadata']['name'], stats['usage']['cpu'] / 1024^3, stats['usage']['memory'] / 1024^3 )

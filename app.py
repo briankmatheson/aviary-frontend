@@ -30,7 +30,7 @@ ul {
 
 lh {
   text-align: center;
-  height: 50%;
+  height: 42%;
   width: 90%;
   color: #fafaf1;
   display: block;
@@ -40,7 +40,7 @@ lh {
   background-position-y: center; 
   background-image: url("aviary.png");
   background-repeat: no-repeat;
-  background-size: 65%;
+  background-size: 55%;
   background-float: right;
 }
 

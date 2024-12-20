@@ -173,27 +173,18 @@ def index():
     k8s_metrics = metrics_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
 
-
-
-    for node in nodes.items:
-        print(f"Node: {node.metadata.name}")
-        print("Capacity:")
-        for resource_name, quantity in node.status.capacity.items():
-            print(f"  {resource_name}: {quantity}")
-
-    
     for stats in k8s_metrics['items']:
         nodes += "Node Name: %s\tCPU: %s\tMemory: %s\n<br>" % (stats['metadata']['name'],
-                                                                     stats['usage']['cpu'],
-                                                                     stats['usage']['memory'])
+                                                               stats['usage']['cpu'],
+                                                               stats['usage']['memory'])
         
     for ing in k8s_ing.items:
         ingresses += "Ingress: %s\t%s\t->\t%s:%d\t(%s / %s)<br>\n" % (ing.metadata.address,
-                                                                  ing.spec.rules[0].host,
-                                                                  ing.spec.rules[0].http.paths[0].backend.service.name,
-                                                                  ing.spec.rules[0].http.paths[0].backend.service.port.number,
-                                                                  ing.metadata.namespace,
-                                                                  ing.metadata.name)
+                                                                      ing.spec.rules[0].host,
+                                                                      ing.spec.rules[0].http.paths[0].backend.service.name,
+                                                                      ing.spec.rules[0].http.paths[0].backend.service.port.number,
+                                                                      ing.metadata.namespace,
+                                                                      ing.metadata.name)
                 
     return style_header, menu, "<br>", "<small>", nodes, "<br>", ingresses, "</small><hr></body></html>"
 

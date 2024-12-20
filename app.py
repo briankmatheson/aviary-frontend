@@ -81,7 +81,7 @@ li a:hover {
 menu = """
 <body>
 <a href="/ca.crt">ca</a>
-<ul>
+<ul><table>
 <th><lh><h1>Aviary</h1></lh></th>
 <tr><td>
 <li><a href="https://gitea">
@@ -192,11 +192,12 @@ def index():
                                                          stats['usage']['memory'])
 
     for ing in k8s_ing.items:
-        ingresses += "Ingress: %s / %s: %s -> %s:%d<br>\n" % (ing.metadata.namespace,
-                                                           ing.metadata.name,
-                                                           ing.spec.rules[0].host,
-                                                           ing.spec.rules[0].http.paths[0].backend.service.name,
-                                                           ing.spec.rules[0].http.paths[0].backend.service.port.number)
+        ingresses += "Ingress: %s -> %s:%d (%s / %s)<br>\n" % (ing.spec.rules[0].host,
+                                                                 ing.spec.rules[0].http.paths[0].backend.service.name,
+                                                                 ing.spec.rules[0].http.paths[0].backend.service.port.number,
+                                                                 ing.metadata.namespace,
+                                                                 ing.metadata.name)
+)
                 
     return style_header, menu, "<br>", nodes, "<br>", ingresses
 

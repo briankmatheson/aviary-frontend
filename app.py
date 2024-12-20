@@ -30,7 +30,7 @@ ul {
 
 lh {
   text-align: center;
-  height: 36%;
+  height: 50%;
   width: 90%;
   color: #fafaf1;
   display: block;
@@ -82,9 +82,7 @@ menu = """
 <body>
 <a href="/ca.crt">ca</a>
 <ul>
-<lh><h1>Aviary</h1>
-<br>
-<\lh>
+<lh><h1>Aviary</h1><\lh>
 <table>
 <tr><td>
 <li><a href="https://gitea">

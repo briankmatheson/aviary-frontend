@@ -186,7 +186,7 @@ def index():
                                                                       ing.metadata.namespace,
                                                                       ing.metadata.name)
                 
-    return style_header, menu, "<br>", "<small>", nodes, "<br>", ingresses, "</small><hr></body></html>"
+    return style_header, menu, "<br>", "<pre>", nodes, "<br>", ingresses, "</pre><hr></body></html>"
 
 
 def main_app():

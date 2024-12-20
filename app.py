@@ -2,7 +2,6 @@ from bottle import Bottle, route, run, template, static_file, debug
 from kubernetes import client, config
 import locale
 
-locale.setlocale(locale.LC_ALL, 'en_US')
 app = Bottle()
 
 @app.route('/favicon.ico')
@@ -175,7 +174,7 @@ def index():
     k8s_nodes = k8s_api.list_nodes()
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
 
-    for i 0 .. k8s_nodes.len():
+    for i in range(0, k8s_nodes.len()):
         node = k8s_nodes[i]
         stats  = k8s_ing[i]
 

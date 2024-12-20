@@ -1,4 +1,4 @@
-all: build rollout
+all: build 
 
 
 build:

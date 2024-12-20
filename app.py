@@ -192,7 +192,7 @@ def index():
                                                          stats['usage']['cpu'],
                                                          stats['usage']['memory'])
 
-    pprint(k8s_ing)
+    print(k8s_ing)
     return style_header, menu, nodes, ing
 
 

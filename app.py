@@ -81,9 +81,8 @@ li a:hover {
 menu = """
 <body>
 <a href="/ca.crt">ca</a>
+<h1>Aviary</h1>
 <ul>
-
-<lh><h1>Aviary</h1></lh>
 <table>
 <tr><td>
 <li><a href="https://gitea">
@@ -103,7 +102,7 @@ drone</a></li>
 <li><a href="https://harbor">
 harbor</a></li>
 </td><td>
-<small>Container Image Registdy</small>
+<small>Container Image Registry</small>
 </td></tr>
 
 <br>
@@ -180,12 +179,15 @@ def index():
     print("Listing pods with their IPs:")
     try:
         api = client.CustomObjectsApi()
+        net_api = kubernetes.client.NetworkingV1Api()
     except:
         raise
+
     k8s_nodes = api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
+    
 
     for stats in k8s_nodes['items']:
-        nodes += "Node Name: %s\tCPU: %s\tMemory: %s" % (stats['metadata']['name'], stats['usage']['cpu'], stats['usage']['memory'])
+        nodes = "Node Name: %s\tCPU: %s\tMemory: %s" % (stats['metadata']['name'], stats['usage']['cpu'] / 1024^3, stats['usage']['memory'] / 1024^3 )
         return style_header, menu, nodes
 
 

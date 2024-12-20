@@ -196,7 +196,7 @@ def index():
                 print(f"  Host: {rule.host}")
                 
     for ing in k8s_ing.items:
-        ingresses += "Name: %s / %s: %s<br>", ing.metadata.namespace, ing.metadata.name, ing.spec.rules[0]].host
+        ingresses += "Name: %s / %s: %s<br>", ing.metadata.namespace, ing.metadata.name, ing.spec.rules[0].host
                 
     return style_header, menu, "<br>", nodes, ingresses
 

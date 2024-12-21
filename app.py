@@ -71,7 +71,7 @@ menu = """
 <body>
 <a href="/ca.crt">ca</a>
 <ul>
-<lh><h1>Ahmed's Aviary</h1></lh>
+<lh><h1>Aviary</h1></lh>
 <table>
 <tr><td>
 <li><a href="https://gitea">

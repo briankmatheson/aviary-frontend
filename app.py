@@ -151,6 +151,12 @@ grafana</a></li>
 </td><td>
 <small>Metrics Visualization and Alerting</small>
 </td></tr>
+<tr><td>
+<li><a href="https://kubernetes-dashboard.local">
+dashboard</a></li>
+</td><td>
+<small>Kubernetes Dashboard</small>
+</td></tr>
 </table>
 </ul>
 

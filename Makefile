@@ -1,4 +1,4 @@
-all: commit push build rollout
+all: build rollout
 
 commit:
 	git commit -am.

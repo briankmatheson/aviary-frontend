@@ -21,8 +21,8 @@ steps:
   settings:
     username: drone 
     password: Drone1111
-    registry: harbor:443
-    repo: harbor:443/aviary-frontend/aviary-frontend
+    registry: harbor.local:443
+    repo: harbor.local:443/aviary-frontend/aviary-frontend
     tags: latest
     skip_tls_verify: true
 

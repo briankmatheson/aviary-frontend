@@ -27,11 +27,17 @@ def ca():
 
 @app.route('/token')
 def token():
-    token = client.AuthenticationV1TokenRequest(
+    token_request = client.AuthenticationV1TokenRequest(
         spec=client.V1TokenRequestSpec(
                         expiration_seconds=3600,
                         audiences="https://aviary.local"))
-    return token
+    
+    response = auth_client.create_namespaced_service_account_token(
+        name="dash",      # service account name
+        namespace="default", # namespace
+        body=token_request
+    )
+    return response.status.token
 
 style_header = """
 <head><title>Aviary Platform</title>

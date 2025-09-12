@@ -74,7 +74,7 @@ menu = """
 <lh><h1>Aviary</h1></lh>
 <table>
 <tr><td>
-<li><a href="https://gitea">
+<li><a href="https://gitea.local">
 gitea</a></li>
 </td><td>
 <small>Source Code Management</small>
@@ -88,7 +88,7 @@ drone</a></li>
 </td></tr>
 
 <tr><td>
-<li><a href="https://harbor">
+<li><a href="https://harbor.local">
 harbor</a></li>
 </td><td>
 <small>Container Image Registry</small>
@@ -169,7 +169,7 @@ def index():
     ingresses = '<pre><small><p>---BEGIN /etc/hosts---</p><table style="font-size:65%">'
     
     #config.kube_config.load_kube_config()
-    print("Listing pods with their IPs:")
+    print("<h2>Cluster:</h2>")
 
     try:
         k8s_api = client.CoreV1Api()

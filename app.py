@@ -22,8 +22,18 @@ def ca():
         raise
 
     secret = k8s_api.read_namespaced_secret("ca-secret", "cert-manager")
-    aviary_ca_cert = base64.b64decode(secret.data["ca.crt"]).decode("utf-8")
+    aviary_ca_cert = base64.b64decode(secret.data["ca.crt").decode("utf-8")
     return aviary_ca_cert
+
+@app.route('/token')
+def token():
+    try:
+        k8s_api = client.CoreV1Api()
+    except:
+        raise
+
+    token = k8s_api.AuthenticationV1TokenRequest()
+    return token
 
 style_header = """
 <head><title>Aviary Platform</title>

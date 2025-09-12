@@ -27,12 +27,7 @@ def ca():
 
 @app.route('/token')
 def token():
-    try:
-        k8s_api = client.CoreV1Api()
-    except:
-        raise
-
-    token = k8s_api.AuthenticationV1TokenRequest()
+    token = AuthenticationV1TokenRequest()
     return token
 
 style_header = """

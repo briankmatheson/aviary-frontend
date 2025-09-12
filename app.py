@@ -22,7 +22,7 @@ def ca():
         raise
 
     secret = k8s_api.read_namespaced_secret("ca-secret", "cert-manager")
-    aviary_ca_cert = base64.b64decode(secret.data["ca.crt").decode("utf-8")
+    aviary_ca_cert = base64.b64decode(secret.data["ca.crt"]).decode("utf-8")
     return aviary_ca_cert
 
 @app.route('/token')
@@ -87,7 +87,8 @@ li a:hover {
 
 menu = """
 <body>
-<a href="/ca.crt">ca</a>
+<a href="/ca.crt">ca</a><br>
+<a href="/token">token</a><br>
 <ul>
 <lh><h1>Aviary</h1></lh>
 <table>

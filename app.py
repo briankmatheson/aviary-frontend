@@ -27,7 +27,7 @@ def ca():
 
 @app.route('/token')
 def token():
-    token = AuthenticationV1TokenRequest()
+    token = client.AuthenticationV1TokenRequest()
     return token
 
 style_header = """

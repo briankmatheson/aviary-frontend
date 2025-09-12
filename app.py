@@ -39,10 +39,7 @@ def token():
     )
     return response.status.token
 
-spec = kube.client.V1TokenRequestSpec(audiences=['https://kubernetes.default.svc'], bound_object_ref=None, expiration_seconds=<expiration in seconds>) body = kube.client.AuthenticationV1TokenRequest(spec=spec) response = api_instance.create_namespaced_service_account_token(name=name, namespace=ns, body=body) 
 style_header = """
-
-
 <head><title>Aviary Platform</title>
 <style>
 ul {

@@ -31,7 +31,7 @@ def token():
         spec=client.V1TokenRequestSpec(
                         expiration_seconds=3600,
                         audiences="https://aviary.local"))
-    
+    auth_client = client.AuthenticationV1Api()
     response = auth_client.create_namespaced_service_account_token(
         name="dash",      # service account name
         namespace="default", # namespace

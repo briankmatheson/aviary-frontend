@@ -2,6 +2,7 @@ from bottle import Bottle, route, run, template, static_file, debug
 from kubernetes import client, config
 import locale
 import re
+import base64
 
 app = Bottle()
 
@@ -15,7 +16,14 @@ def logo():
 
 @app.route('/ca.crt')
 def ca():
-    return static_file('ca.crt', root='./') 
+    try:
+        k8s_api = client.CoreV1Api()
+    except:
+        raise
+
+    secret = k8s_api.read_namespaced_secret("ca-secret", "cert-manager")
+    aviary_ca_cert = base64.b64decode(secret.data).decode("utf-8")
+    return aviary_ca_cert
 
 style_header = """
 <head><title>Aviary Platform</title>
@@ -177,11 +185,11 @@ def index():
         net_api = client.NetworkingV1Api()
     except:
         raise
-
+    
     k8s_metrics = metrics_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
     k8s_nodes = k8s_api.list_node()
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
-
+                                    
 
 
     for i in range(0, len(k8s_nodes.items)):

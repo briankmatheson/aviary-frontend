@@ -30,7 +30,7 @@ def token():
     token = client.AuthenticationV1TokenRequest(
             client.V1TokenRequestSpec(
                     expiration_seconds=3600,
-                    audiences="https://aviary.local")   
+                    audiences="https://aviary.local"))
     return token
 
 style_header = """

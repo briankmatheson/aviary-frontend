@@ -28,9 +28,9 @@ def ca():
 @app.route('/token')
 def token():
     token = client.AuthenticationV1TokenRequest(
-            client.V1TokenRequestSpec(
-                    expiration_seconds=3600,
-                    audiences="https://aviary.local"))
+        spec=client.V1TokenRequestSpec(
+                        expiration_seconds=3600,
+                        audiences="https://aviary.local"))
     return token
 
 style_header = """

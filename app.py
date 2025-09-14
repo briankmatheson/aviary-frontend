@@ -54,7 +54,7 @@ ul {
 
 lh {
   text-align: center;
-  height: 42%;
+  height: 95%;
   width: 90%;
   color: #fafaf1;
   display: block;

@@ -43,7 +43,7 @@ def token():
 style_header = """
 <head><title>Aviary Platform</title>
 <style>
-ul {
+table {
   list-style-type: none;
   margin: 16;
   padding: 16;

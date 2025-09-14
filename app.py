@@ -58,16 +58,6 @@ ul {
   background-float: right;
 }
 
-lh {
-  text-align: Left;
-  height: 5%;
-  width: 20%;
-  color: #fafaf1;
-  display: block;
-  background-image: linear-gradient(DarkSlateGray, #f1fef1, #fafaf1);
-  float: top;
-  vertical-align: top;
-}
 
 li a {
   display: block;
@@ -95,10 +85,9 @@ menu = """
 <body>
 
 <ul>
-<lh><h1>Aviary</h1></lh>
 <table>
 <tr><td>
-<li><a href="/ca.crt">ca</a><br>
+<li><a href="/ca.crt"
 </td></tr>
 <tr><td>
 aviary-ca.crt</a></li>

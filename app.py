@@ -49,7 +49,7 @@ ul {
   padding: 16;
   overflow: hidden;
   width: 40%;
-  height: 105%;
+  height: 95%;
   background-position-x: center; 
   background-position-y: center; 
   background-image: url("aviary.png");
@@ -61,7 +61,7 @@ ul {
 lh {
   text-align: Left;
   height: 5%;
-  width: 40%;
+  width: 20%;
   color: #fafaf1;
   display: block;
   background-image: linear-gradient(DarkSlateGray, #f1fef1, #fafaf1);
@@ -99,10 +99,22 @@ menu = """
 <table>
 <tr><td>
 <li><a href="/ca.crt">ca</a><br>
+</td></tr>
+<tr><td>
 aviary-ca.crt</a></li>
 </td><td>
+<small>Interactive Developmet PaaS</small>
+</td><td>
+
+</td><td>
 <li><a href="/token">token</a><br>
+</td></tr>
+<tr><td>
 default:default token</a></li>
+</td><td>
+<small>token for use in dashboard, etc.</small>
+</td></tr>
+
 </td><td>
 <li><a href="https://gitea.local">
 </td></tr>

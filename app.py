@@ -230,10 +230,11 @@ def index():
 
 
     ip = requests.get('https://api.ipify.org')
+    my_ip += ip.text
     
     nodes += "</table>"
     ingresses += "</pre><br></table><p>---END---</p></small>"
-    my_ip += ip.text, "</h3><br>\n"
+    my_ip += "</h3><br>\n"
 
     return style_header, menu, "<br>", nodes, "<br>", ingresses, "<hr></body></html>"
 

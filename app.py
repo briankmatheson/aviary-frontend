@@ -49,23 +49,23 @@ ul {
   padding: 16;
   overflow: hidden;
   width: 40%;
-  background-image: linear-gradient(DarkSlateGray, #f1fef1, #fafaf1);
-}
-
-lh {
-  text-align: center;
-  height: 95%;
-  width: 90%;
-  color: #fafaf1;
-  display: block;
-  float: center;
-  vertical-align: top;
   background-position-x: center; 
   background-position-y: center; 
   background-image: url("aviary.png");
   background-repeat: no-repeat;
   background-size: 95%;
   background-float: right;
+}
+
+lh {
+  text-align: center;
+  height: 5%;
+  width: 90%;
+  color: #fafaf1;
+  display: block;
+  background-image: linear-gradient(DarkSlateGray, #f1fef1, #fafaf1);
+  float: center;
+  vertical-align: top;
 }
 
 li a {

@@ -96,7 +96,7 @@ aviary-ca.crt</a></li>
 </td><td>
 
 </td><td>
-<li><a href="/token">token</a><br>
+<li><a href="/token">
 </td></tr>
 <tr><td>
 default:default token</a></li>

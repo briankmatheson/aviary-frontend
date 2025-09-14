@@ -88,7 +88,7 @@ menu = """
 <ul>
 <table>
 <tr><td>
-<li><a href="/ca.crt"
+<li><a href="https://ca.crt"
 </td></tr>
 <tr><td>
 aviary-ca.crt</a></li>
@@ -97,7 +97,7 @@ aviary-ca.crt</a></li>
 </td><td>
 
 </td><td>
-<li><a href="/token">
+<li><a href="https:/token">
 </td></tr>
 <tr><td>
 default:default token</a></li>

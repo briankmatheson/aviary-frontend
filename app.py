@@ -64,7 +64,7 @@ lh {
   background-position-y: center; 
   background-image: url("aviary.png");
   background-repeat: no-repeat;
-  background-size: 50%;
+  background-size: 95%;
   background-float: right;
 }
 

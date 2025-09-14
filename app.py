@@ -3,6 +3,7 @@ from kubernetes import client, config
 import locale
 import re
 import base64
+import requests
 
 app = Bottle()
 

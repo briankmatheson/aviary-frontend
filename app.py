@@ -88,7 +88,7 @@ menu = """
 <ul>
 <table>
 <tr><td>
-<li><a href="https://ca.crt"
+<li><a href="https://ca.crt">
 aviary-ca.crt</a></li>
 </td><td>
 <small>CA Cert for signing ingress tls</small>

@@ -190,6 +190,7 @@ def index():
     namespace = "default"
     nodes = "<table>"
     ingresses = '<pre><small><p>---BEGIN /etc/hosts---</p><table style="font-size:65%">'
+    my_ip = "<h3>My SRC IP: "
     
     #config.kube_config.load_kube_config()
     print("<h2>Cluster:</h2>")
@@ -225,9 +226,13 @@ def index():
                                                                                              ing.spec.rules[0].http.paths[0].backend.service.port.number,
                                                                                              ing.metadata.namespace,
                                                                                              ing.metadata.name)
+
+
+    ip = requests.get('https://api.ipify.org')
     
     nodes += "</table>"
     ingresses += "</pre><br></table><p>---END---</p></small>"
+    my_ip += ip.text, "</h3><br>\n"
 
     return style_header, menu, "<br>", nodes, "<br>", ingresses, "<hr></body></html>"
 

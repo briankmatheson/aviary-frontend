@@ -58,13 +58,13 @@ ul {
 }
 
 lh {
-  text-align: center;
+  text-align: Left;
   height: 5%;
-  width: 90%;
+  width: 40%;
   color: #fafaf1;
   display: block;
   background-image: linear-gradient(DarkSlateGray, #f1fef1, #fafaf1);
-  float: center;
+  float: top;
   vertical-align: top;
 }
 

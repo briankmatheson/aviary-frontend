@@ -47,6 +47,7 @@ ul {
   list-style-type: none;
   margin: 16;
   padding: 16;
+  font-size: 16:
   overflow: hidden;
   width: 40%;
   height: 95%;

@@ -1,5 +1,5 @@
 from bottle import Bottle, route, run, template, static_file, debug
-from kubernetes import client, config
+from kubernetes import client, config, AuthenticationV1TokenRequest
 import locale
 import re
 import base64

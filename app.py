@@ -93,13 +93,20 @@ li a:hover {
 
 menu = """
 <body>
-<a href="/ca.crt">ca</a><br>
-<a href="/token">token</a><br>
+
 <ul>
 <lh><h1>Aviary</h1></lh>
 <table>
 <tr><td>
+<li><a href="/ca.crt">ca</a><br>
+aviary-ca.crt</a></li>
+</td><td>
+<li><a href="/token">token</a><br>
+default:default token</a></li>
+</td><td>
 <li><a href="https://gitea.local">
+</td></tr>
+<tr><td>
 gitea</a></li>
 </td><td>
 <small>Source Code Management</small>

@@ -91,10 +91,10 @@ menu = """
 <li><a href="https://ca.crt"
 aviary-ca.crt</a></li>
 </td><td>
-<small>Interactive Developmet PaaS</small>
-</td><tr>
+<small>CA Cert for signing ingress tls</small>
+</td></tr>
 
-</td><td>
+<tr><td>
 <li><a href="https:/token">
 default:defaul{t token</a></li>
 </td><td>

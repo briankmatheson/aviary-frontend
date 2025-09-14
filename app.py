@@ -89,31 +89,30 @@ menu = """
 <table>
 <tr><td>
 <li><a href="https://ca.crt"
-</td></tr>
-<tr><td>
+</td><td>
 aviary-ca.crt</a></li>
 </td><td>
 <small>Interactive Developmet PaaS</small>
-</td><td>
+</td><tr>
 
 </td><td>
 <li><a href="https:/token">
-</td></tr>
-<tr><td>
-default:default token</a></li>
+</td><td>
+default:defaul{t token</a></li>
 </td><td>
 <small>token for use in dashboard, etc.</small>
 </td></tr>
 
-</td><td>
-<li><a href="https://gitea.local">
-</td></tr>
+<br>
+
 <tr><td>
+<li><a href="https://gitea.local">
+</td><td>
 gitea</a></li>
 </td><td>
 <small>Source Code Management</small>
 </td></tr>
-
+ 
 <tr><td>
 <li><a href="https://drone.local">
 drone</a></li>

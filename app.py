@@ -49,6 +49,7 @@ ul {
   padding: 16;
   overflow: hidden;
   width: 40%;
+  height: 105%;
   background-position-x: center; 
   background-position-y: center; 
   background-image: url("aviary.png");

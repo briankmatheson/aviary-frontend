@@ -13,7 +13,7 @@ def favicon():
 
 @app.route('/aviary.png')
 def logo():
-    return static_file('aviary.png', root='./') 
+    return static_file('aviary.jpg', root='./') 
 
 @app.route('/ca.crt')
 def ca():

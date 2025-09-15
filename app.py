@@ -43,13 +43,12 @@ def token():
 style_header = """
 <head><title>Aviary Platform</title>
 <style>
-table {
+ul {
   list-style-type: none;
   margin: 16;
   padding 4;
   overflow: hidden;
   width: 40%;
-  height: 95%;
   background-position-x: right; 
   background-position-y: bottom; 
   background-image: url("aviary.jpg");

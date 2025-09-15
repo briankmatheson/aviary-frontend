@@ -50,11 +50,11 @@ table {
   overflow: hidden;
   width: 40%;
   height: 95%;
-  background-position-x: center; 
-  background-position-y: center; 
+  background-position-x: right; 
+  background-position-y: bottom; 
   background-image: url("aviary.jpg");
   background-repeat: no-repeat;
-  background-size: 95%;
+  background-size: 92%;
   background-float: right;
 }
 
@@ -70,7 +70,7 @@ li a {
 td small {
   color: gray;
   text-align: right;
-  float: right;
+  float: left;
   font-size: 120%;
 
 }

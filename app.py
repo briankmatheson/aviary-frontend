@@ -55,6 +55,7 @@ ul {
   background-repeat: no-repeat;
   background-size: 102%;
   background-float: right;
+  background-height: 100%
 }
 
 

@@ -11,7 +11,7 @@ app = Bottle()
 def favicon():
     return static_file('favicon.ico', root='./') 
 
-@app.route('/aviary.png')
+@app.route('/aviary.jpg')
 def logo():
     return static_file('aviary.jpg', root='./') 
 
@@ -52,7 +52,7 @@ ul {
   height: 95%;
   background-position-x: center; 
   background-position-y: center; 
-  background-image: url("aviary.png");
+  background-image: url("aviary.jpg");
   background-repeat: no-repeat;
   background-size: 95%;
   background-float: right;

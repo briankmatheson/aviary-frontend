@@ -45,15 +45,15 @@ style_header = """
 <style>
 ul {
   list-style-type: none;
-  margin: 16;
-  padding 4;
+  margin: 1;
+  padding 1;
   overflow: hidden;
   width: 40%;
   background-position-x: right; 
   background-position-y: bottom; 
   background-image: url("aviary.jpg");
   background-repeat: no-repeat;
-  background-size: 92%;
+  background-size: 102%;
   background-float: right;
 }
 

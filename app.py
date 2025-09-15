@@ -46,7 +46,7 @@ style_header = """
 table {
   list-style-type: none;
   margin: 16;
-  padding: 16;
+  padding 4;
   overflow: hidden;
   width: 40%;
   height: 95%;

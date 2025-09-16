@@ -48,7 +48,6 @@ style_header = """
 <meta http-equiv="Expires" content="0" /><style>
 
 body {
-  list-style-type: none;
   margin: 1;
   padding 1;
   overflow: hidden;
@@ -57,18 +56,17 @@ body {
   background-position-y: bottom; 
   background-image: url("aviary.png");
   background-repeat: no-repeat;
-  background-size: 102%;
+  background-size: 95%;
   background-float: right;
   background-height: 100%;
 }
 
-table {
-  background-image: none
-  background-color: navajowhite
-}
+ul {
+  list-style-type: none;
+}  
 
 li {
-  width: 40%;
+  width: 70%;
 }
 
 li a {

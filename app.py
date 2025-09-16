@@ -56,9 +56,8 @@ body {
   background-position-y: bottom; 
   background-image: url("aviary.png");
   background-repeat: no-repeat;
-  background-size: 101%;
-  background-float: left;
-  background-height: 100%;
+  background-size: 65%;
+  background-float: right;
 }
 
 ul {

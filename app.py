@@ -15,7 +15,7 @@ def favicon():
 def logo():
     return static_file('aviary.png', root='./') 
 
-@app.route('/ca.crt')
+@app.route('/ca')
 def ca():
     try:
         k8s_api = client.CoreV1Api()

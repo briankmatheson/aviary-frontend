@@ -52,12 +52,12 @@ body {
   padding 1;
   overflow: hidden;
   width: 98%;
-  background-position-x: right; 
+  background-position-x: left; 
   background-position-y: bottom; 
   background-image: url("aviary.png");
   background-repeat: no-repeat;
   background-size: 95%;
-  background-float: right;
+  background-float: left;
   background-height: 100%;
 }
 
@@ -67,11 +67,13 @@ ul {
 
 li {
   width: 70%;
+  padding: 16
 }
 
 li a {
   display: block;
   color: Blue;
+  weight: bold;
   text-align: left;
   text-decoration: none;
   font-size: 200%;
@@ -79,6 +81,7 @@ li a {
 
 td small {
   color: black;
+  weight: bold;
   text-align: right;
   float: left;
   font-size: 120%;
@@ -206,7 +209,7 @@ dashboard</a></li>
 def index():
     namespace = "default"
     nodes = "<table>"
-    ingresses = '<pre><small><p>---BEGIN /etc/hosts---</p><table style="font-size:65%,background-color=navajowhite,background-image=none">'
+    ingresses = '<pre><small><p>---BEGIN /etc/hosts---</p><table style="font-size:65%">'
     my_ip = "<h3>My SRC IP: "
     
     #config.kube_config.load_kube_config()

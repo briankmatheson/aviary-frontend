@@ -47,7 +47,7 @@ style_header = """
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" /><style>
 
-ul {
+body {
   list-style-type: none;
   margin: 1;
   padding 1;

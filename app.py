@@ -42,7 +42,11 @@ def token():
 
 style_header = """
 <head><title>Aviary Platform</title>
-<style>
+
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" /><style>
+
 ul {
   list-style-type: none;
   margin: 1;
@@ -55,11 +59,11 @@ ul {
   background-repeat: no-repeat;
   background-size: 102%;
   background-float: right;
-  background-height: 100%
+  background-height: 100%;
 }
 
 li {
-  width: 40%
+  width: 40%;
 }
 
 li a {

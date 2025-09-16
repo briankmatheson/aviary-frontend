@@ -48,7 +48,7 @@ ul {
   margin: 1;
   padding 1;
   overflow: hidden;
-  width: 40%;
+  width: 98%;
   background-position-x: right; 
   background-position-y: bottom; 
   background-image: url("aviary.jpg");
@@ -58,6 +58,9 @@ ul {
   background-height: 100%
 }
 
+li {
+  width: 40%
+}
 
 li a {
   display: block;

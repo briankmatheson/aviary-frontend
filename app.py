@@ -62,6 +62,11 @@ body {
   background-height: 100%;
 }
 
+table {
+  background-image: none
+  background-color: navajowhite
+}
+
 li {
   width: 40%;
 }
@@ -75,7 +80,7 @@ li a {
 }
 
 td small {
-  color: gray;
+  color: black;
   text-align: right;
   float: left;
   font-size: 120%;
@@ -203,7 +208,7 @@ dashboard</a></li>
 def index():
     namespace = "default"
     nodes = "<table>"
-    ingresses = '<pre><small><p>---BEGIN /etc/hosts---</p><table style="font-size:65%">'
+    ingresses = '<pre><small><p>---BEGIN /etc/hosts---</p><table style="font-size:65%,background-color=navajowhite,background-image=none">'
     my_ip = "<h3>My SRC IP: "
     
     #config.kube_config.load_kube_config()

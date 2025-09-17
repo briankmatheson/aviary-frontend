@@ -47,7 +47,7 @@ style_header = """
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" /><style>
 
-body {
+lh {
   margin: 16;
   padding 16;
   overflow: hidden;

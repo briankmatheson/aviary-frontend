@@ -225,15 +225,14 @@ def index():
     k8s_metrics = metrics_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
     k8s_nodes = k8s_api.list_node()
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
-                                    
-
 
     for i in range(0, len(k8s_nodes.items)):
         try:
             stats = k8s_metrics['items'][i]
         except:
-            stats = 0
-
+            stats['usage']['cpu'] = 0
+            stats['usage']['memory'] = 0
+            
         node = k8s_nodes.items[i]
 
         cpu = int(re.sub(r'\D', '', stats['usage']['cpu'])) / int(re.sub(r'\D', '', node.status.capacity['cpu']))/1024/1024/1024 * 100

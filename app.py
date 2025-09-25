@@ -230,8 +230,8 @@ def index():
         try:
             stats = k8s_metrics['items'][i]
         except:
-            stats['usage']['cpu'] = 0
-            stats['usage']['memory'] = 0
+            stats['usage']['cpu'] = "0"
+            stats['usage']['memory'] = "0"
             
         node = k8s_nodes.items[i]
 

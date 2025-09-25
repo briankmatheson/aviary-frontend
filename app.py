@@ -229,7 +229,11 @@ def index():
 
 
     for i in range(0, len(k8s_nodes.items)):
-        stats  = k8s_metrics['items'][i]
+        try:
+            stats = k8s_metrics['items'][i]
+        except:
+            stats = 0
+
         node = k8s_nodes.items[i]
 
         cpu = int(re.sub(r'\D', '', stats['usage']['cpu'])) / int(re.sub(r'\D', '', node.status.capacity['cpu']))/1024/1024/1024 * 100

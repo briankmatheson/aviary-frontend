@@ -59,7 +59,7 @@ ul {
   background-repeat: no-repeat;
   background-size: 102%;
   background-float: right;
-  background-alpha: 150;
+  background-alpha: 30;
 }
 
 li {

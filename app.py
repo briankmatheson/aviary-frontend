@@ -66,7 +66,7 @@ div {
   background-repeat: no-repeat;
   background-width: 2000px;
   background-float: right;
-  opacity: .69;
+  opacity: .42;
 }
 
 
@@ -78,7 +78,7 @@ div {
 
 li {
   background-color: gray82;
-  padding: 16;
+  padding: 6;
 }
 
 

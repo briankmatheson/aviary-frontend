@@ -52,7 +52,7 @@ ul {
   margin: 16;
   padding 16;
   overflow: hidden;
-  width: 70%;
+/  width: 70%;
 }
 
 div {

@@ -264,14 +264,13 @@ def index():
                                                                                                      cpu,
                                                                                                      mem)
     for ing in k8s_ing.items:
-        ingresses += "<tr><td>%s\t</td><td>%s</td><td># %s:%s</td><td>(%s / %s)</td></tr>" % (ing.status.load_balancer.ingress[0].ip,
-                                                                                             
-                                                                                             f'<a href="{ing.spec.rules[0].host}">{ing.spec.rules[0].host}'</a>     ,
-                                                                                             ing.spec.rules[0].http.paths[0].backend.service.name,
-                                                                                             ing.spec.rules[0].http.paths[0].backend.service.port.number,
-                                                                                             ing.metadata.namespace,
-                                                                                             ing.metadata.name)
-
+        ingresses += "<tr><td>%s\t</td><td>%s</td><td># %s:%s</td><td>(%s / %s)</td></tr>"
+        % (ing.status.load_balancer.ingress[0].ip,
+           f'<a href="{ing.spec.rules[0].host}">{ing.spec.rules[0].host}</a>',
+           ing.spec.rules[0].http.paths[0].backend.service.name,
+           ing.spec.rules[0].http.paths[0].backend.service.port.number,
+           ing.metadata.namespace,
+           ing.metadata.name)
 
     ip = requests.get('https://api.ipify.org')
     my_ip += ip.text

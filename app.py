@@ -63,19 +63,19 @@ div {
   background-repeat: no-repeat;
   background-size: 92%;
   background-float: right;
-  opacity: .3;
-  <table>
-    background-color: gray50;
-    opacity: .69;
-  </table>
-}
-
-table {
-  background-color: gray50;
   opacity: .69;
 }
 
+div {
+  table {
+    background-color: gray92;
+    background-float: center;
+    opacity: .9;
+  }
+}
+
 li {
+  background-color: gray82;
   padding: 16;
 }
 

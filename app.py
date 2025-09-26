@@ -4,6 +4,8 @@ import locale
 import re
 import base64
 import requests
+import socket
+
 
 app = Bottle()
 
@@ -60,7 +62,7 @@ ul {
 }
 
 div {
-  background-position-x: left; 
+  background-position-x: right; 
   background-position-y: top; 
   background-image: url("https://aviary.local/aviary.png");
   background-repeat: no-repeat;
@@ -278,7 +280,7 @@ def index():
     ingresses += "</pre><br></table><p>---END---</p></small>"
     my_ip += "</h3><br>\n"
 
-    return style_header, menu, "<br>", nodes, "<br>", ingresses, "<hr></body></html>"
+    return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip,  "<hr></body></html>"
 
 
 def main_app():

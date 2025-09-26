@@ -9,11 +9,11 @@ app = Bottle()
 
 @app.route('/favicon.ico')
 def favicon():
-    return static_file('favicon.ico', root='./') 
+    return static_file('aviary004.png', root='./') 
 
 @app.route('/aviary.png')
 def logo():
-    return static_file('aviary.png', root='./') 
+    return static_file('aviary004.png', root='./') 
 
 @app.route('/ca')
 def ca():
@@ -54,9 +54,9 @@ lh {
   width: 98%;
   background-position-x: left; 
   background-position-y: bottom; 
-  background-image: url("aviary.png");
+  background-image: url("/aviary.png");
   background-repeat: no-repeat;
-  background-size: 65%;
+  background-size: 102%;
   background-float: right;
 }
 

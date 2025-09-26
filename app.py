@@ -60,7 +60,7 @@ body {
   background-position-y: bottom; 
   background-image: url("/aviary.png");
   background-repeat: no-repeat;
-  background-size: 82%;
+  background-size: 42%;
   background-float: right;
   background-opacity: .3;
 }

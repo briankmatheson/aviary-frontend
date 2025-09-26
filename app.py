@@ -269,7 +269,7 @@ def index():
             ingresses = ingresses + ing.status.load_balancer.ingress[0].ip
             ingresses = ingresses + "<a href=\"{ing.spec.rules[0].host}\">{ing.spec.rules[0].host}</a>"
             ingresses = ingresses + ing.spec.rules[0].http.paths[0].backend.service.name
-            ingresses = ingresses + ing.spec.rules[0].http.paths[0].backend.service.port.number.to_str()
+            ingresses = ingresses + str(ing.spec.rules[0].http.paths[0].backend.service.port.number)
             ingresses = ingresses + ing.metadata.namespace
             ingresses = ingresses + ing.metadata.name
 

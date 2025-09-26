@@ -64,7 +64,7 @@ div {
   background-position-y: top; 
   background-image: url("https://aviary.local/aviary.png");
   background-repeat: no-repeat;
-  background-size: 72%;
+  background-width: 2000px;
   background-float: right;
   opacity: .69;
 }
@@ -132,7 +132,6 @@ default:default token</a></li>
 <br>
 
 <tr><td>
->>>>>>> de514a1 (fixes for .local)
 <li><a href="https://gitea.local">
 gitea</a></li>
 </td><td>

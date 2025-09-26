@@ -55,12 +55,12 @@ ul {
   width: 70%;
 }
 
-body {
+lh {
   background-position-x: left; 
-  background-position-y: bottom; 
+  background-position-y: top; 
   background-image: url("/aviary.png");
   background-repeat: no-repeat;
-  background-size: 42%;
+  background-size: 12%;
   background-float: right;
   background-opacity: .3;
 }

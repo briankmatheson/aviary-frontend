@@ -64,10 +64,11 @@ div {
   background-position-y: top; 
   background-image: url("https://aviary.local/aviary.png");
   background-repeat: no-repeat;
-  background-size: 92%;
+  background-size: 72%;
   background-float: right;
   opacity: .69;
 }
+
 
 div {
   table {

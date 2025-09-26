@@ -9,7 +9,7 @@ app = Bottle()
 
 @app.route('/favicon.ico')
 def favicon():
-    return static_file('aviary004.png', root='./') 
+    return static_file('favicon.ico', root='./') 
 
 @app.route('/aviary.png')
 def logo():
@@ -81,6 +81,10 @@ li {
   padding: 6;
 }
 
+h1 {
+  font-size: 400%
+  weight: bold
+}
 
 li a {
   display: block;

@@ -63,17 +63,17 @@ div {
   background-repeat: no-repeat;
   background-size: 42%;
   background-float: right;
-  opacity: .3;
+  opacity: .3;s
+table {
+  background-color: gray50;
+  opacity: .69;
+}
 }
 
 li {
   padding: 16;
 }
 
-table {
-  background-color: gray50;
-  opacity: .69;
-}
 
 li a {
   display: block;

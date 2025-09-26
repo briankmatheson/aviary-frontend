@@ -132,6 +132,7 @@ default:default token</a></li>
 <br>
 
 <tr><td>
+>>>>>>> de514a1 (fixes for .local)
 <li><a href="https://gitea.local">
 gitea</a></li>
 </td><td>

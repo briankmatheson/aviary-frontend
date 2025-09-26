@@ -109,7 +109,7 @@ aviary-ca.crt</a></li>
 
 <tr><td>
 <li><a href="https:/token">
-default:defaul{t token</a></li>
+default:default token</a></li>
 </td><td>
 <small>token for use in dashboard, etc.</small>
 </td></tr>

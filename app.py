@@ -53,13 +53,15 @@ ul {
   padding 16;
   overflow: hidden;
   width: 70%;
+}
+table {
   background-position-x: left; 
   background-position-y: bottom; 
   background-image: url("/aviary.png");
   background-repeat: no-repeat;
   background-size: 102%;
   background-float: right;
-  background-alpha: 30;
+  background-opacity: .3;
 }
 
 li {

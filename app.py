@@ -64,7 +64,7 @@ div {
   background-position-y: top; 
   background-image: url("https://aviary.local/aviary.png");
   background-repeat: no-repeat;
-  background-width: 2000px;
+  background-width: 1000px;
   background-float: right;
   opacity: .42;
 }
@@ -88,7 +88,7 @@ li a {
   weight: bold;
   text-align: left;
   text-decoration: none;
-  font-size: 200%;
+  font-size: 300%;
 }
 
 td small {
@@ -97,7 +97,7 @@ td small {
   weight: bold;
   text-align: right;
   float: left;
-  font-size: 120%;
+  font-size: 200%;
 
 }
 li a:hover {

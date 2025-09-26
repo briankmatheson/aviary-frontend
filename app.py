@@ -47,23 +47,20 @@ style_header = """
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" /><style>
 
-lh {
+ul {
+  list-style-type: none;
   margin: 16;
   padding 16;
   overflow: hidden;
-  width: 98%;
+  width: 70%;
   background-position-x: left; 
   background-position-y: bottom; 
   background-image: url("/aviary.png");
   background-repeat: no-repeat;
   background-size: 102%;
   background-float: right;
+  background-alpha: 50;
 }
-
-ul {
-  width: 70%;
-  list-style-type: none;
-}  
 
 li {
   padding: 16

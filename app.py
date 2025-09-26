@@ -54,6 +54,7 @@ ul {
   overflow: hidden;
   width: 70%;
 }
+
 body {
   background-position-x: left; 
   background-position-y: bottom; 

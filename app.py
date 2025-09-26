@@ -40,6 +40,7 @@ def token():
     )
     return response.status.token
 
+
 style_header = """
 <head><title>Aviary Platform</title>
 
@@ -70,6 +71,7 @@ li {
 }
 
 table {
+  background-color: gray50;
   opacity: .69;
 }
 

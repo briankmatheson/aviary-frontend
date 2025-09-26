@@ -9,15 +9,6 @@ clone:
 
   
 steps:
-- name: pwd
-  image: debian
-  commands:
-  - pwd
-  - ls
-
-
-
-
 - name: kaniko  
   image: harness/kaniko
   settings:

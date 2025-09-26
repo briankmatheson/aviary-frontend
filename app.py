@@ -72,7 +72,8 @@ div {
 
 div {
   table {
-
+    background-color: gray92;
+  }
 }
 
 li {
@@ -169,7 +170,7 @@ mlflow</a></li>
 <br>
 
 <tr><td>
-<li><a href="https://postgres-ui.local">
+<li><a href="https://pgui.local">
 postgres-ui</a></li>
 </td><td>
 <small>Relational Database</small>

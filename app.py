@@ -263,14 +263,15 @@ def index():
         nodes += "<tr><td>Node Name: %s</td><td>CPU: %3d%%</td><td>Memory: %3d%%</td></tr>" % (stats['metadata']['name'],
                                                                                                      cpu,
                                                                                                      mem)
-    for ing in k8s_ing.items:
-        ingresses += "<tr><td>%s\t</td><td>%s</td><td># %s:%s</td><td>(%s / %s)</td></tr>"
-        % (ing.status.load_balancer.ingress[0].ip,
-           f'<a href="{ing.spec.rules[0].host}">{ing.spec.rules[0].host}</a>',
-           ing.spec.rules[0].http.paths[0].backend.service.name,
-           ing.spec.rules[0].http.paths[0].backend.service.port.number,
-           ing.metadata.namespace,
-           ing.metadata.name)
+        ingresses = ""
+        for ing in k8s_ing.items:
+            ingresses = ingresses + "<tr><td>%s\t</td><td>%s</td><td># %s:%s</td><td>(%s / %s)</td></tr>"
+            ingresses = ingresses + ing.status.load_balancer.ingress[0].ip
+            ingresses = ingresses + "<a href=\"{ing.spec.rules[0].host}\">{ing.spec.rules[0].host}</a>"
+            ingresses = ingresses + ing.spec.rules[0].http.paths[0].backend.service.name
+            ingresses = ingresses + ing.spec.rules[0].http.paths[0].backend.service.port.number
+            ingresses = ingresses + ing.metadata.namespace
+            ingresses = ingresses + ing.metadata.name
 
     ip = requests.get('https://api.ipify.org')
     my_ip += ip.text

@@ -63,18 +63,19 @@ div {
   background-width: 42%;
   background-float: right;
   opacity: .3;
-  
 }
 
 li {
-  padding: 16
+  padding: 16;
+}
 
+table {
+  opacity: .69;
 }
 
 li a {
   display: block;
   color: Blue;
-  opacity: .9
   weight: bold;
   text-align: left;
   text-decoration: none;

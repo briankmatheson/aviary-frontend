@@ -116,15 +116,15 @@ menu = """
 <table>
 <tr><td>
 
-<li><a href="https://ca.crt">
+<li><a href="/ca.crt">
 aviary-ca.crt</a></li>
 </td><td>
 <small>CA Cert for signing ingress tls</small>
 </td></tr>
 
 <tr><td>
-<li><a href="https:/token">
-default:default token</a></li>
+<li><a href="/token">
+token</a></li>
 </td><td>
 <small>token for use in dashboard, etc.</small>
 </td></tr>
@@ -165,7 +165,7 @@ jupyterhub</a></li>
 <li><a href="https://mlflow.local">
 mlflow</a></li>
 </td><td>
-<small>Machine Learning Lifecycle Management</small>
+<small>Machine Learning Lifecycle</small>
 </td></tr>
 
 <br>

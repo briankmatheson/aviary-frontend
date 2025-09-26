@@ -55,14 +55,15 @@ ul {
   width: 70%;
 }
 
-lh {
+div {
   background-position-x: left; 
   background-position-y: top; 
-  background-image: url("/aviary.png");
+  background-image: url("https://aviary.local/aviary.png");
   background-repeat: no-repeat;
   background-size: 12%;
   background-float: right;
   background-opacity: .3;
+  
 }
 
 li {
@@ -97,7 +98,7 @@ li a:hover {
 
 menu = """
 <body>
-
+<div>
 <ul>
 <lh><h1>Aviary</h1></lh>
 <table>
@@ -203,6 +204,7 @@ dashboard</a></li>
 </td></tr>
 </table>
 </ul>
+</div>
 
 """
 

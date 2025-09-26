@@ -50,10 +50,13 @@ style_header = """
 
 ul {
   list-style-type: none;
-  margin: 16;
-  padding 16;
+  margin: 6;
+  padding 6;
   overflow: hidden;
-  width: 70%;
+  width: 72%;
+  background-color: gray92;
+  background-float: center;
+  opacity: .9;
 }
 
 div {
@@ -68,10 +71,7 @@ div {
 
 div {
   table {
-    background-color: gray92;
-    background-float: center;
-    opacity: .9;
-  }
+
 }
 
 li {

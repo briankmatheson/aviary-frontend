@@ -60,7 +60,7 @@ div {
   background-position-y: top; 
   background-image: url("https://aviary.local/aviary.png");
   background-repeat: no-repeat;
-  background-heightwidth: 42%;
+  background-width: 42%;
   background-float: right;
   opacity: .3;
   

@@ -74,7 +74,7 @@ li {
 li a {
   display: block;
   color: Blue;
-  opacity: .9
+  opacity: .9v
   weight: bold;
   text-align: left;
   text-decoration: none;
@@ -82,6 +82,7 @@ li a {
 }
 
 td small {
+  opacity: 1
   color: black;
   weight: bold;
   text-align: right;

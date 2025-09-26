@@ -74,7 +74,7 @@ li {
 li a {
   display: block;
   color: Blue;
-  opacity: .9v
+  opacity: .9
   weight: bold;
   text-align: left;
   text-decoration: none;

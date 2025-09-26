@@ -54,7 +54,7 @@ ul {
   overflow: hidden;
   width: 70%;
 }
-table {
+body {
   background-position-x: left; 
   background-position-y: bottom; 
   background-image: url("/aviary.png");

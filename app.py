@@ -60,7 +60,7 @@ div {
   background-position-y: top; 
   background-image: url("https://aviary.local/aviary.png");
   background-repeat: no-repeat;
-  background-height: 102%;
+  background-heightwidth: 42%;
   background-float: right;
   opacity: .3;
   
@@ -74,6 +74,7 @@ li {
 li a {
   display: block;
   color: Blue;
+  opacity: .9
   weight: bold;
   text-align: left;
   text-decoration: none;
@@ -89,7 +90,7 @@ td small {
 
 }
 li a:hover {
-  color: #fafaf1;
+  color: lightyellow;
   background-color: DarkSlateGray;
 }
 </style>

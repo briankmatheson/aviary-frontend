@@ -235,7 +235,7 @@ def ingress_line(ing):
     name = ing.metadata.name
     ip = ing.status.load_balancer.ingress[0].ip,
 
-    return f"<a href=\"\"><tr><td>{ip}\t</td><td>{name}</td><td># {ip}:{serviceport}</td><td>({ns} / {servicename})</td></tr></a>\n"
+    return f"<a href=\"\"><tr><td>{ip[0]}\t</td><td>{name}</td><td># ({ns} / {servicename})</td></tr></a>\n"
 
 @app.route('/')
 def index():

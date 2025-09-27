@@ -106,7 +106,7 @@ td small {
   font-size: 200%;
 
 }
-tr a:hover {
+tbody a:hover {
   color: lightgreen;
   background-color: DarkSlateGray;
 }

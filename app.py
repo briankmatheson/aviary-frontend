@@ -107,12 +107,12 @@ td small {
 
 }
 tbody a:hover {
-  color: lightgreen;
-  background-color: DarkSlateGray;
+  color: DarkSlateGray;
+  background-color: lightgreen;
 }
 li a:hover {
-  color: lightyellow;
-  background-color: DarkSlateGray;
+  color: DarkSlateGray;
+  background-color: lightyellow;
 }
 </style>
 </head>

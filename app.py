@@ -227,6 +227,16 @@ dashboard</a></li>
 
 """
 
+def ingress_line(ing):
+    host = f'<a href="{ing.spec.rules[0].host}">{ing.spec.rules[0].host}</a>'
+    name = ing.spec.rules[0].http.paths[0].backend.service.name
+    service = ing.spec.rules[0].http.paths[0].backend.service.port.number
+    ns = ing.metadata.namespace
+    name = ing.metadata.name
+    ip = ing.status.load_balancer.ingress[0].ip,
+
+    return f"<tr><td>{ip}\t</td><td>{name}</td><td># {ip}:{service}</td><td>({ns} / {name})</td></tr>"
+
 @app.route('/')
 def index():
     namespace = "default"
@@ -260,27 +270,20 @@ def index():
         cpu = int(re.sub(r'\D', '', stats['usage']['cpu'])) / int(re.sub(r'\D', '', node.status.capacity['cpu']))/1024/1024/1024 * 100
         mem = int(re.sub(r'\D', '', stats['usage']['memory'])) / int(re.sub(r'\D', '', node.status.allocatable['memory'])) * 100
         
-        nodes += "<tr><td>Node Name: %s</td><td>CPU: %3d%%</td><td>Memory: %3d%%</td></tr>" % (stats['metadata']['name'],
-                                                                                                     cpu,
-                                                                                                     mem)
-        ingresses = ""
+        nodes += "<tr><td>Node Name: %s</td><td>CPU: %3d%%</td><td>Memory: %3d%%</td></tr>" % (
+            stats['metadata']['name'], cpu, mem) 
+        ingresses = "# host entries for ingresses present in this cluster"
         for ing in k8s_ing.items:
-            ingresses = ingresses + "<tr><td>%s\t</td><td>%s</td><td># %s:%s</td><td>(%s / %s)</td></tr>"
-            ingresses = ingresses + ing.status.load_balancer.ingress[0].ip
-            ingresses = ingresses + "<a href=\"{ing.spec.rules[0].host}\">{ing.spec.rules[0].host}</a>"
-            ingresses = ingresses + ing.spec.rules[0].http.paths[0].backend.service.name
-            ingresses = ingresses + str(ing.spec.rules[0].http.paths[0].backend.service.port.number)
-            ingresses = ingresses + ing.metadata.namespace
-            ingresses = ingresses + ing.metadata.name
+            ingresses += ingress_line(ing) 
 
-    ip = requests.get('https://api.ipify.org')
-    my_ip += ip.text
+        ip = requests.get('https://api.ipify.org')
+        my_ip += ip.text
     
-    nodes += "</table>"
-    ingresses += "</pre><br></table><p>---END---</p></small>"
-    my_ip += "</h3><br>\n"
+        nodes += "</table>"
+        ingresses += "</pre><br></table><p>---END---</p></small>"
+        my_ip += "</h3><br>\n"
 
-    return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip,  "<hr></body></html>"
+        return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip,  "<hr></body></html>"
 
 
 def main_app():

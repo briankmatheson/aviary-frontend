@@ -106,6 +106,10 @@ td small {
   font-size: 200%;
 
 }
+tr a:hover {
+  color: lightgreen;
+  background-color: DarkSlateGray;
+}
 li a:hover {
   color: lightyellow;
   background-color: DarkSlateGray;

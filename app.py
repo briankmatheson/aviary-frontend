@@ -236,10 +236,10 @@ def ingress_line(ing):
     servicename = ing.spec.rules[0].http.paths[0].backend.service.name
     serviceport = ing.spec.rules[0].http.paths[0].backend.service.port.number
     ns = ing.metadata.namespace
-    name = ing.metadata.name
+    ingressname = ing.metadata.name
     ip = ing.status.load_balancer.ingress[0].ip,
 
-    return f"<tr><td>{ip[0]}\t</td><td>{host}</td><td># <a href=\"https://{host}\">https://{name} ({ns} / {servicename})</a></td></tr>\n"
+    return f"<tr><td>{ip[0]}\t</td><td>{host}</td><td># <a href=\"https://{host}\">https://{host} -> ing {ingressname} -> (svc -n {ns} {servicename}:{serviceport})</a></td></tr>\n"
 
 @app.route('/')
 def index():

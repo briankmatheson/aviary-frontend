@@ -228,14 +228,14 @@ dashboard</a></li>
 """
 
 def ingress_line(ing):
-    host = f'<a href="{ing.spec.rules[0].host}">{ing.spec.rules[0].host}</a>'
-    name = ing.spec.rules[0].http.paths[0].backend.service.name
-    service = ing.spec.rules[0].http.paths[0].backend.service.port.number
+    host = ing.spec.rules[0].host
+    servicename = ing.spec.rules[0].http.paths[0].backend.service.name
+    serviceport = ing.spec.rules[0].http.paths[0].backend.service.port.number
     ns = ing.metadata.namespace
     name = ing.metadata.name
     ip = ing.status.load_balancer.ingress[0].ip,
 
-    return f"<tr><td>{ip}\t</td><td>{name}</td><td># {ip}:{service}</td><td>({ns} / {name})</td></tr>"
+    return f"<a href=\"\"><tr><td>{ip}\t</td><td>{name}</td><td># {ip}:{serviceport}</td><td>({ns} / {servicename})</td></tr></a>\n"
 
 @app.route('/')
 def index():
@@ -271,8 +271,9 @@ def index():
         mem = int(re.sub(r'\D', '', stats['usage']['memory'])) / int(re.sub(r'\D', '', node.status.allocatable['memory'])) * 100
         
         nodes += "<tr><td>Node Name: %s</td><td>CPU: %3d%%</td><td>Memory: %3d%%</td></tr>" % (
-            stats['metadata']['name'], cpu, mem) 
-        ingresses = "# host entries for ingresses present in this cluster"
+            stats['metadata']['name'], cpu, mem)
+        
+        ingresses += "# host entries for ingresses present in Aviary k8s cluster"
         for ing in k8s_ing.items:
             ingresses += ingress_line(ing) 
 

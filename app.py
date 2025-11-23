@@ -44,7 +44,10 @@ def token():
         namespace="default",
         body=token_request
     )
-    return response.status.token
+    formatted = "<pre>"
+    formatted += response.status.token
+    formatted += "</pre>"
+    return formatted
 
 style_header = """
 <head><title>Aviary Platform</title>

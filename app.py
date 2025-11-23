@@ -284,7 +284,7 @@ def index():
     k8s_nodes = k8s_api.list_node()
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
 
-    for i in range(0, len(k8s_nodes.items + 1)):
+    for i in range(0, len(k8s_nodes.items) +1):
         try:
             stats = k8s_metrics['items'][i]
         except:

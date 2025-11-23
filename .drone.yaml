@@ -13,7 +13,7 @@ steps:
   image: harness/kaniko
   settings:
     username: robot$drone
-    password: bmVoduOjEqaaxZAb87AXqAc29ORcik2v
+    password: 1eIYgToM7oD7tibs6WRzRMHnqYhR4lzf
     registry: harbor.local:443
     repo: harbor.local:443/aviary-frontend/aviary-frontend
     tags: latest

@@ -164,6 +164,13 @@ harbor</a></li>
 <small>Container Image Registry</small>
 </td></tr>
 
+<tr><td>
+<li><a href="https://argo.local">
+argo</a></li>
+</td><td>
+<small>Continuous Delivery</small>
+</td></tr>
+
 <br>
 
 <tr><td>

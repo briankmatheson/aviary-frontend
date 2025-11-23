@@ -11,8 +11,8 @@ clone:
 steps:
 - name: kaniko  
   image: harness/kaniko
-  settings:
-    username: robot$drone
+  settings:  
+    username: robot$aviary-frontend+drone 
     password: 1eIYgToM7oD7tibs6WRzRMHnqYhR4lzf
     registry: harbor.local:443
     repo: harbor.local:443/aviary-frontend/aviary-frontend

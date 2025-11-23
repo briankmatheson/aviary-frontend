@@ -1,7 +1,7 @@
-all: build rollout
+all: ca.crt 
 
-aviary.crt:
-	echo | awk "{print `kubectl get cm -n kube-public -o yaml kube-root-ca.crt | yq '.data."ca.crt"'`}" > aviary.crt
+ca.crt:
+	eval echo `kubectl get secret -n cert-manager -o yaml ca-secret | yq '.data."ca.crt"'` | base64 -d > ca.crt
 
 commit:
 	git commit -am.

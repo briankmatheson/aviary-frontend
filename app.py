@@ -25,23 +25,26 @@ def ca():
         raise
 
     secret = k8s_api.read_namespaced_secret("ca-secret", "cert-manager")
-    aviary_ca_cert = base64.b64decode(secret.data["ca.crt"]).decode("utf-8")
+    aviary_ca_cert = "<pre>"
+    aviary_ca_cert += base64.b64decode(secret.data["ca.crt"]).decode("utf-8")
+    aviary_ca_cert += "</pre>"
     return aviary_ca_cert
 
 @app.route('/token')
 def token():
+    auth_client = client.CoreV1Api()
     token_request = client.AuthenticationV1TokenRequest(
         spec=client.V1TokenRequestSpec(
-                        expiration_seconds=3600,
-                        audiences=["https://aviary.local"]))
-    auth_client = client.AuthenticationV1Api()
+            expiration_seconds=3600,
+            audiences=["https://aviary.local"]
+        )
+    )
     response = auth_client.create_namespaced_service_account_token(
-        name="dash",      # service account name
-        namespace="default", # namespace
+        name="dash",
+        namespace="default",
         body=token_request
     )
     return response.status.token
-
 
 style_header = """
 <head><title>Aviary Platform</title>
@@ -109,6 +112,7 @@ td small {
 tbody a:hover {
   color: DarkSlateGray;
   background-color: lightgreen;
+
 }
 li a:hover {
   color: DarkSlateGray;
@@ -126,7 +130,7 @@ menu = """
 <table>
 <tr><td>
 
-<li><a href="/ca.crt">
+<li><a href="/ca">
 aviary-ca.crt</a></li>
 </td><td>
 <small>CA Cert for signing ingress tls</small>
@@ -298,6 +302,6 @@ def main_app():
         print("Error: can\'t load incluster config, trying kubeconfig\n")
         config.kube_config.load_kube_config()
 
-    run(app=app, debug=True, host='0.0.0.0', port=8080)
+    run(app=app, debug=True, host='0.0.0.0', port=8086)
 
 main_app()

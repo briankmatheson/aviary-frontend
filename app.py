@@ -5,7 +5,7 @@ import re
 import base64
 import requests
 import socket
-
+from pprint import pprint
 
 app = Bottle()
 
@@ -32,23 +32,16 @@ def ca():
 
 @app.route('/token')
 def token():
-    auth_client = client.CoreV1Api()
-    token_request = client.AuthenticationV1TokenRequest(
-        spec=client.V1TokenRequestSpec(
-            expiration_seconds=3600,
-            audiences=["https://aviary.local"]
-        )
-    )
-    response = auth_client.create_namespaced_service_account_token(
-        name="dash",
-        namespace="default",
-        body=token_request
-    )
-    formatted = "<pre>"
-    formatted += response.status.token
-    formatted += "</pre>"
-    return formatted
-
+    k8s_api = client.CoreV1Api()
+    with k8s_api.ApiClient(kubernetes.client.Configuration()) as api_client:
+        api_instance = kubernetes.client.ApiregistrationV1Api(api_client)
+        api_request = k8s_api.V1APIService() 
+        try:
+            response = api_instance.create_api_service(api_request, pretty=true)
+            return pprint(response)
+        except ApiException as e:
+            print("failed to creatte api connection: %s\n" % e)
+    
 style_header = """
 <head><title>Aviary Platform</title>
 
@@ -139,13 +132,15 @@ aviary-ca.crt</a></li>
 <small>CA Cert for signing ingress tls</small>
 </td></tr>
 
-<tr><td>
-<li><a href="/token">
-token</a></li>
-</td><td>
-<small>token for use in dashboard, etc.</small>
-</td></tr>
-
+<!--
+ <tr><td>
+ <li><a href="/token">
+ token</a></li>
+ </td><td>
+ <small>token for use in dashboard, etc.</small>
+ </td></tr>
+-->
+ 
 <br>
 
 <tr><td>
@@ -217,9 +212,26 @@ rustpad</a></li>
 <small>Shared Text Editor</small>
 </td></tr>
 
+<tr><td>
+<li><a href="https://jitsi.local">
+jitsi</a></li>
+</td><td>
+<small>Shared Text Editor</small>
+</td></tr>
+
 
 <br>
-
+<tr><td>
+<li><a href="https://kubeshark.local">
+kubeshark</a></li>
+</td><td>
+<small>k8s api call debugging</small>
+</td></tr><tr><td>
+<li><a href="https://hubble.local">
+hubble</a></li>
+</td><td>
+<small>Cilium network observability</small>
+</td></tr>
 <tr><td>
 <li><a href="https://grafana.local">
 grafana</a></li>
@@ -244,7 +256,10 @@ def ingress_line(ing):
     serviceport = ing.spec.rules[0].http.paths[0].backend.service.port.number
     ns = ing.metadata.namespace
     ingressname = ing.metadata.name
-    ip = ing.status.load_balancer.ingress[0].ip,
+    try:
+        ip = ing.status.load_balancer.ingress[0].ip,
+    except:
+        ip = "No ip yet"
 
     return f"<tr><td>{ip[0]}\t</td><td>{host}</td><td># <a href=\"https://{host}\">https://{host} -> ing {ingressname} -> (svc -n {ns} {servicename}:{serviceport})</a></td></tr>\n"
 
@@ -269,7 +284,7 @@ def index():
     k8s_nodes = k8s_api.list_node()
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
 
-    for i in range(0, len(k8s_nodes.items)):
+    for i in range(0, len(k8s_nodes.items + 1)):
         try:
             stats = k8s_metrics['items'][i]
         except:

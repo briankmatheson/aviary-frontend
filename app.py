@@ -93,7 +93,7 @@ li a {
   weight: bold;
   text-align: left;
   text-decoration: none;
-  font-size: 300%;
+  font-size: 200%;
 }
 
 td small {
@@ -102,7 +102,7 @@ td small {
   weight: bold;
   text-align: right;
   float: left;
-  font-size: 200%;
+  font-size: 150%;
 
 }
 tbody a:hover {
@@ -142,6 +142,9 @@ aviary-ca.crt</a></li>
 -->
  
 <br>
+<br>
+<br>
+<br>
 
 <tr><td>
 <li><a href="https://gitea.local">
@@ -172,6 +175,9 @@ argo</a></li>
 </td></tr>
 
 <br>
+<br>
+<br>
+<br>
 
 <tr><td>
 <li><a href="https://jupyterhub.local">
@@ -187,7 +193,12 @@ mlflow</a></li>
 <small>Machine Learning Lifecycle</small>
 </td></tr>
 
-<br>
+<tr><td>
+<li><a href="https://qdrant.local">
+qdrant</a></li>
+</td><td>
+<small>Vector Database</small>
+</td></tr>
 
 <tr><td>
 <li><a href="https://postgres-ui.local">
@@ -203,6 +214,9 @@ minio</a></li>
 <small>Object Store</small>
 </td></tr>
 
+<br>
+<br>
+<br>
 <br>
 
 <tr><td>
@@ -223,11 +237,15 @@ rustpad</a></li>
 <li><a href="https://jitsi.local">
 jitsi</a></li>
 </td><td>
-<small>Shared Text Editor</small>
+<small>Video Conferencing</small>
 </td></tr>
 
 
 <br>
+<br>
+<br>
+<br>
+
 <tr><td>
 <li><a href="https://kubeshark.local">
 kubeshark</a></li>
@@ -291,7 +309,7 @@ def index():
     k8s_nodes = k8s_api.list_node()
     k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
 
-    for i in range(0, len(k8s_nodes.items) +1):
+    for i in range(0, len(k8s_nodes.items)):
         try:
             stats = k8s_metrics['items'][i]
         except:
@@ -299,25 +317,23 @@ def index():
             stats['usage']['memory'] = "0"
             
         node = k8s_nodes.items[i]
-
         cpu = int(re.sub(r'\D', '', stats['usage']['cpu'])) / int(re.sub(r'\D', '', node.status.capacity['cpu']))/1024/1024/1024 * 100
         mem = int(re.sub(r'\D', '', stats['usage']['memory'])) / int(re.sub(r'\D', '', node.status.allocatable['memory'])) * 100
-        
         nodes += "<tr><td>Node Name: %s</td><td>CPU: %3d%%</td><td>Memory: %3d%%</td></tr>" % (
             stats['metadata']['name'], cpu, mem)
         
-        ingresses += "# host entries for ingresses present in Aviary k8s cluster"
-        for ing in k8s_ing.items:
-            ingresses += ingress_line(ing) 
+    ingresses += "# host entries for ingresses present in Aviary k8s cluster"
+    for ing in k8s_ing.items:
+        ingresses += ingress_line(ing) 
 
-        ip = requests.get('https://api.ipify.org')
-        my_ip += ip.text
+    ip = requests.get('https://api.ipify.org')
+    my_ip += ip.text
     
-        nodes += "</table>"
-        ingresses += "</pre><br></table><p>---END---</p></small>"
-        my_ip += "</h3><br>\n"
+    nodes += "</table>"
+    ingresses += "</pre><br></table><p>---END---</p></small>"
+    my_ip += "</h3><br>\n"
 
-        return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip,  "<hr></body></html>"
+    return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip,  "<hr></body></html>"
 
 
 def main_app():

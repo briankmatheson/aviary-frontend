@@ -333,7 +333,12 @@ def index():
     ingresses += "</pre><br></table><p>---END---</p></small>"
     my_ip += "</h3><br>\n"
 
-    return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip,  "<hr></body></html>"
+    log=""
+    events = sorted(api.list_event_for_all_namespaces(), key=last_timestamp, reverse=True)
+    for event in events.items:
+        log += sprint(f"Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})")
+
+    return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip, "<hr><br>", log,  "<hr></body></html>"
 
 
 def main_app():

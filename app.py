@@ -334,7 +334,7 @@ def index():
     my_ip += "</h3><br>\n"
 
     log=""
-    raw_events = k8s_api.list_event_for_all_namespaces()
+    raw_events = k8s_api.list_event_for_all_namespaces().items
     events_with_timestamps = list(map(lambda e: last_timestamp in e, raw_events))
     events = sorted(events_with_timestamps, key=last_timestamp, reverse=True)[0-23]
     for event in events.items:

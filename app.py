@@ -328,6 +328,8 @@ def index():
 
     ip = requests.get('https://api.ipify.org')
     my_ip += ip.text
+
+    my_kube_system_ns_uid = k8s_api.read_namespace("kube-system").metadata.uid
     
     nodes += "</table>"
     ingresses += "</pre><br></table><p>---END---</p></small>"
@@ -341,7 +343,7 @@ def index():
         except:
             log.append(f"NO TIMESTAMP Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})<br>")
     log.sort(reverse=True)
-    return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip, "<hr><br>",  "\n".join(log),  "<hr></body></html>"
+    return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip, my_kube_system_ns_uid, "<hr><br>",  "\n".join(log ),  "<hr></body></html>"
 
 
 def main_app():

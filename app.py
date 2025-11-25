@@ -339,7 +339,7 @@ def index():
             return e
 
     raw_events = k8s_api.list_event_for_all_namespaces().items
-    events_with_timestamps = list(map(efilter(e), raw_events))
+    events_with_timestamps = list(map(efilter, raw_events))
     events = sorted(events_with_timestamps, reverse=True)
     for event in events:
         log += f"{event.last_timestamp} Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})"
@@ -353,7 +353,7 @@ def main_app():
     except:
         print("Error: can\'t load incluster config, trying kubeconfig\n")
         config.kube_config.load_kube_config()
-
-    run(app=app, debug=True, host='0.0.0.0', port=8086)
+ 
+   run(app=app, debug=True, host='0.0.0.0', port=8086)
 
 main_app()

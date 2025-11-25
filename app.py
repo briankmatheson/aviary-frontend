@@ -338,7 +338,7 @@ def index():
     events_with_timestamps = list(map(lambda e: hasattr(e, 'last_timestamp'), raw_events))
     events = sorted(events_with_timestamps, reverse=True)
     for event in events:
-        log += f"{event.last_timestamp Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})"
+        log += f"{event.last_timestamp} Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})"
 
     return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip, "<hr><br>", log,  "<hr></body></html>"
 

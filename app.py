@@ -334,7 +334,9 @@ def index():
     my_ip += "</h3><br>\n"
 
     log=""
-    events = sorted(k8s_api.list_event_for_all_namespaces(), key=last_timestamp, reverse=True)
+    raw_events = k8s_api.list_event_for_all_namespaces()
+    events_with_timestamps = list(map(lambda e: if last_timestamp in e, raw_events))
+    events = sorted(events_with_timestamps, key=last_timestamp, reverse=True)[0-23]
     for event in events.items:
         log += sprint(f"Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})")
 

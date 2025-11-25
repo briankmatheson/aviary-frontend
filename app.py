@@ -340,8 +340,8 @@ def index():
             log.append(f"{event.last_timestamp} Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})<br>")
         except:
             log.append(f"NO TIMESTAMP Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})<br>")
-    log.sort()
-    return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip, "<hr><br>",  "\n".join(log),  "<hr></body></html>"
+    log.sort(reverse=True)
+    return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip, "<hr><br>",  "\n".join(log[0-23]),  "<hr></body></html>"
 
 
 def main_app():

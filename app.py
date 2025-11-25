@@ -333,15 +333,15 @@ def index():
     ingresses += "</pre><br></table><p>---END---</p></small>"
     my_ip += "</h3><br>\n"
 
-    log=""
+    log=[]
     raw_events = k8s_api.list_event_for_all_namespaces().items
     for event in raw_events:
         try:
-            log += f"{event.last_timestamp} Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})<br>"
+            log.append(f"{event.last_timestamp} Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})<br>")
         except:
-            log += f"NO TIMESTAMP Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})<br>"
+            log.append(f"NO TIMESTAMP Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})<br>")
 
-    return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip, "<hr><br>", log,  "<hr></body></html>"
+    return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip, "<hr><br>",  "\n".join(sorted(log)),  "<hr></body></html>"
 
 
 def main_app():

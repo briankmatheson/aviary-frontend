@@ -354,6 +354,6 @@ def main_app():
         print("Error: can\'t load incluster config, trying kubeconfig\n")
         config.kube_config.load_kube_config()
  
-   run(app=app, debug=True, host='0.0.0.0', port=8086)
+    run(app=app, debug=True, host='0.0.0.0', port=8086)
 
 main_app()

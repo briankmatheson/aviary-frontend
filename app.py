@@ -335,7 +335,7 @@ def index():
 
     log=""
     raw_events = k8s_api.list_event_for_all_namespaces().items
-    events_with_timestamps = list(map(lambda e: "last_timestamp" in e.keys(), raw_events))
+    events_with_timestamps = map(lambda e: hasattr(e, 'last_timestamp'):, raw_events)
     events = sorted(events_with_timestamps, key=last_timestamp, reverse=True)[0-23]
     for event in events.items:
         log += sprint(f"Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})")

@@ -334,8 +334,12 @@ def index():
     my_ip += "</h3><br>\n"
 
     log=""
+    def efilter(e):
+        if 'last_timestamp' in e:
+            return e
+
     raw_events = k8s_api.list_event_for_all_namespaces().items
-    events_with_timestamps = list(map(lambda e: if hasattr(e, 'last_timestamp'): return e, raw_events))
+    events_with_timestamps = list(map(efilter(e), raw_events))
     events = sorted(events_with_timestamps, reverse=True)
     for event in events:
         log += f"{event.last_timestamp} Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})"

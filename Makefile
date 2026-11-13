@@ -1,20 +1,24 @@
-all: ca.crt 
+# Build and push the landing page image; aviary-deploy's apps/aviary-frontend.tf
+# pulls REGISTRY/aviary-frontend:TAG.
+REGISTRY ?= registry.mesh.harlem.bmath.nyc
+TAG      ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+IMAGE    := $(REGISTRY)/aviary-frontend:$(TAG)
 
-ca.crt:
-	eval echo `kubectl get secret -n cert-manager -o yaml ca-secret | yq '.data."ca.crt"'` | base64 -d > ca.crt
+.PHONY: build push run rollout
 
-commit:
-	git commit -am.
+build:
+	docker build --network=host -t $(IMAGE) -t $(REGISTRY)/aviary-frontend:latest .
 
-push:
-	git push
+push: build
+	docker push $(IMAGE)
+	docker push $(REGISTRY)/aviary-frontend:latest
+	@echo "$(IMAGE)"
 
-build: 
-	drone build create bmath/aviary-frontend
-	sleep 6
-	watch -q5 drone build info bmath/aviary-frontend
-	watch -g drone build info bmath/aviary-frontend
+## Run locally against the current kubeconfig
+run:
+	PORT=8086 python3 app.py
 
+## Restart the deployment so it pulls :latest again
 rollout:
-	kubectl rollout restart deployment aviary-frontend
-	watch -d kubectl get pods
+	kubectl -n kube-system rollout restart deployment aviary-frontend
+	kubectl -n kube-system rollout status deployment aviary-frontend

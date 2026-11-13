@@ -1,4 +1,3 @@
-*#
-*~
-.aider*
+kubeconfig.yaml
 ca.crt
+__pycache__/

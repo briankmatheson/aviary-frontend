@@ -1,358 +1,240 @@
-from bottle import Bottle, route, run, template, static_file, debug
-from kubernetes import client, config
-import locale
+"""Aviary landing page.
+
+A menu of everything the shared Gateway serves, built from the cluster's
+HTTPRoutes (so a new vhost in aviary-deploy's local.vhosts shows up here
+without touching this app), plus the cluster CA for download and a node
+table.
+
+Env:
+  CLUSTER_ISSUER  cert-manager ClusterIssuer whose CA secret /ca serves
+                  (default ca-issuer; a selfsigned issuer has no CA)
+  PORT            listen port (default 8086)
+"""
+import html
+import os
 import re
-import base64
-import requests
-import socket
-from pprint import pprint
+import threading
+import time
+
+from bottle import Bottle, response, static_file
+from kubernetes import client, config
 
 app = Bottle()
+HERE = os.path.dirname(os.path.abspath(__file__))
+ISSUER = os.environ.get("CLUSTER_ISSUER", "ca-issuer")
 
-@app.route('/favicon.ico')
-def favicon():
-    return static_file('favicon.ico', root='./') 
+# What each app is for. Keyed by the first label of the hostname; anything
+# not listed still appears, just without a blurb.
+BLURBS = {
+    "argo": "Continuous delivery (Argo CD)",
+    "drone": "Continuous integration",
+    "gitea": "Source code management",
+    "harbor": "Container image registry",
+    "grafana": "Metrics visualisation and alerting",
+    "headlamp": "Kubernetes UI",
+    "postgres-ui": "Postgres operator UI",
+    "rustpad": "Shared text editor",
+    "bash": "In-cluster shell",
+    "velero": "Backup and restore",
+    "jupyterhub": "Interactive notebooks",
+    "mlflow": "Machine learning lifecycle",
+    "qdrant": "Vector database",
+    "minio": "Object store",
+    "jitsi": "Video conferencing",
+}
 
-@app.route('/aviary.png')
-def logo():
-    return static_file('aviary004.png', root='./') 
+try:
+    config.load_incluster_config()
+except config.ConfigException:
+    config.load_kube_config()
 
-@app.route('/ca')
-def ca():
+_cache = {"at": 0.0, "data": None}
+_lock = threading.Lock()
+
+
+def routes():
+    """[(host, namespace, service, port, gateway_ip)] for every HTTPRoute."""
+    custom = client.CustomObjectsApi()
+    out = []
+    gws = {}
+    for gw in custom.list_cluster_custom_object(
+        "gateway.networking.k8s.io", "v1", "gateways"
+    ).get("items", []):
+        addrs = [a["value"] for a in gw.get("status", {}).get("addresses", [])]
+        gws[(gw["metadata"]["namespace"], gw["metadata"]["name"])] = addrs[0] if addrs else ""
+    for r in custom.list_cluster_custom_object(
+        "gateway.networking.k8s.io", "v1", "httproutes"
+    ).get("items", []):
+        spec = r.get("spec", {})
+        hosts = spec.get("hostnames", [])
+        if not hosts:
+            continue
+        ns = r["metadata"]["namespace"]
+        ip = ""
+        for p in spec.get("parentRefs", []):
+            ip = gws.get((p.get("namespace", ns), p.get("name")), "") or ip
+        for rule in spec.get("rules", []):
+            # The https-redirect route has filters and no backends; skip it.
+            for b in rule.get("backendRefs", []):
+                for h in hosts:
+                    out.append((h, b.get("namespace", ns), b.get("name", ""), b.get("port", ""), ip))
+    # one line per host
+    seen, uniq = set(), []
+    for row in sorted(out):
+        if row[0] not in seen:
+            seen.add(row[0])
+            uniq.append(row)
+    return uniq
+
+
+def nodes():
+    v1 = client.CoreV1Api()
+    usage = {}
     try:
-        k8s_api = client.CoreV1Api()
-    except:
-        raise
-
-    secret = k8s_api.read_namespaced_secret("ca-secret", "cert-manager")
-    aviary_ca_cert = "<pre>"
-    aviary_ca_cert += base64.b64decode(secret.data["ca.crt"]).decode("utf-8")
-    aviary_ca_cert += "</pre>"
-    return aviary_ca_cert
-
-@app.route('/token')
-def token():
-    k8s_api = client.CoreV1Api()
-    with k8s_api.ApiClient(kubernetes.client.Configuration()) as api_client:
-        api_instance = kubernetes.client.ApiregistrationV1Api(api_client)
-        api_request = k8s_api.V1APIService() 
-        try:
-            response = api_instance.create_api_service(api_request, pretty=true)
-            return pprint(response)
-        except ApiException as e:
-            print("failed to creatte api connection: %s\n" % e)
-    
-style_header = """
-<head><title>Aviary Platform</title>
-
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-<meta http-equiv="Pragma" content="no-cache" />
-<meta http-equiv="Expires" content="0" /><style>
-
-ul {
-  list-style-type: none;
-  margin: 6;
-  padding 6;
-  overflow: hidden;
-  width: 72%;
-  background-color: gray92;
-  background-float: center;
-  opacity: .9;
-}
-
-div {
-  background-position-x: right; 
-  background-position-y: top; 
-  background-image: url("https://aviary.local/aviary.png");
-  background-repeat: no-repeat;
-  background-width: 1000px;
-  background-float: left;
-  opacity: .42;
-}
+        for n in client.CustomObjectsApi().list_cluster_custom_object(
+            "metrics.k8s.io", "v1beta1", "nodes"
+        ).get("items", []):
+            usage[n["metadata"]["name"]] = n["usage"]
+    except Exception:
+        pass  # metrics-server optional
+    rows = []
+    for n in v1.list_node().items:
+        ready = next((c.status for c in n.status.conditions if c.type == "Ready"), "Unknown")
+        roles = ",".join(
+            k.split("/", 1)[1] for k in n.metadata.labels if k.startswith("node-role.kubernetes.io/")
+        ) or "worker"
+        u = usage.get(n.metadata.name)
+        cpu = mem = "-"
+        if u:
+            cpu = "%d%%" % (100 * _q(u["cpu"]) / _q(n.status.allocatable["cpu"]))
+            mem = "%d%%" % (100 * _q(u["memory"]) / _q(n.status.allocatable["memory"]))
+        rows.append((n.metadata.name, roles, ready, n.status.node_info.kubelet_version, cpu, mem))
+    return rows
 
 
-div {
-  tbody {
-    background-color: gray92;
-  }
-}
+_SUFFIX = {"n": 1e-9, "u": 1e-6, "m": 1e-3, "": 1, "k": 1e3, "Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40, "K": 1e3, "M": 1e6, "G": 1e9}
 
-li {
-  background-color: gray82;
-  padding: 6;
-}
 
-h1 {
-  font-size: 400%
-  weight: bold
-}
+def _q(s):
+    m = re.fullmatch(r"([0-9.]+)([a-zA-Z]*)", str(s))
+    return float(m.group(1)) * _SUFFIX.get(m.group(2), 1)
 
-li a {
-  display: block;
-  color: Blue;
-  weight: bold;
-  text-align: left;
-  text-decoration: none;
-  font-size: 200%;
-}
 
-td small {
-  opacity: 1
-  color: black;
-  weight: bold;
-  text-align: right;
-  float: left;
-  font-size: 150%;
+def ca_pem():
+    cm = client.CustomObjectsApi()
+    issuer = cm.get_cluster_custom_object("cert-manager.io", "v1", "clusterissuers", ISSUER)
+    name = issuer["spec"].get("ca", {}).get("secretName")
+    if not name:
+        return None
+    sec = client.CoreV1Api().read_namespaced_secret(name, "cert-manager")
+    import base64
+    data = sec.data.get("ca.crt") or sec.data.get("tls.crt")
+    return base64.b64decode(data).decode() if data else None
 
-}
-tbody a:hover {
-  color: DarkSlateGray;
-  background-color: lightgreen;
 
-}
-li a:hover {
-  color: DarkSlateGray;
-  background-color: lightyellow;
-}
-</style>
-</head>
+def snapshot():
+    with _lock:
+        if time.time() - _cache["at"] > 15:
+            _cache["data"] = {"routes": routes(), "nodes": nodes()}
+            _cache["at"] = time.time()
+        return _cache["data"]
+
+
+PAGE = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Aviary</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+ body {{ font: 16px/1.4 system-ui, sans-serif; margin: 0; color: #222;
+        background: #f4f4f1 url(/aviary.png) no-repeat right -80px top -80px; background-size: 520px; }}
+ main {{ max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }}
+ h1 {{ font-size: 56px; margin: 0 0 4px; letter-spacing: -1px; }}
+ h1 small {{ font-size: 16px; color: #666; margin-left: 12px; letter-spacing: 0; }}
+ h2 {{ margin: 36px 0 8px; font-size: 18px; color: #555; text-transform: uppercase; letter-spacing: 1px; }}
+ ul.menu {{ list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }}
+ ul.menu li a {{ display: block; padding: 14px 16px; background: rgba(255,255,255,.85); border-radius: 8px;
+                 text-decoration: none; color: #1a4d8f; font-size: 22px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }}
+ ul.menu li a:hover {{ background: #fffbe6; }}
+ ul.menu li a small {{ display: block; font-size: 13px; color: #666; margin-top: 2px; }}
+ table {{ border-collapse: collapse; background: rgba(255,255,255,.85); width: 100%; font-size: 14px; }}
+ th, td {{ text-align: left; padding: 6px 10px; border-bottom: 1px solid #e3e3df; }}
+ th {{ color: #666; font-weight: 600; }}
+ pre {{ background: rgba(255,255,255,.85); padding: 12px; overflow-x: auto; font-size: 13px; }}
+ .ok {{ color: #1b7f3b; }} .bad {{ color: #b00020; }}
+ footer {{ margin-top: 48px; color: #888; font-size: 13px; }}
+</style></head><body><main>
+<h1>Aviary<small>{host}</small></h1>
+<h2>Apps</h2>
+<ul class="menu">{menu}</ul>
+<h2>Cluster</h2>
+<table><tr><th>Node</th><th>Role</th><th>Ready</th><th>Kubelet</th><th>CPU</th><th>Memory</th></tr>{nodes}</table>
+<h2>/etc/hosts</h2>
+<p>If your resolver does not know these names:</p>
+<pre>{hosts}</pre>
+<footer>Served by {me}</footer>
+</main></body></html>
 """
 
-menu = """
-<body>
-<div>
-<ul>
-<lh><h1>Aviary</h1></lh>
-<table>
-<tr><td>
 
-<li><a href="/ca">
-aviary-ca.crt</a></li>
-</td><td>
-<small>CA Cert for signing ingress tls</small>
-</td></tr>
-
-<!--
- <tr><td>
- <li><a href="/token">
- token</a></li>
- </td><td>
- <small>token for use in dashboard, etc.</small>
- </td></tr>
--->
- 
-<br>
-<br>
-<br>
-<br>
-
-<tr><td>
-<li><a href="https://gitea.local">
-gitea</a></li>
-</td><td>
-<small>Source Code Management</small>
-</td></tr>
- 
-<tr><td>
-<li><a href="https://drone.local">
-drone</a></li>
-</td><td>
-<small>Continous Integration</small>
-</td></tr>
-
-<tr><td>
-<li><a href="https://harbor.local">
-harbor</a></li>
-</td><td>
-<small>Container Image Registry</small>
-</td></tr>
-
-<tr><td>
-<li><a href="https://argo.local">
-argo</a></li>
-</td><td>
-<small>Continuous Delivery</small>
-</td></tr>
-
-<br>
-<br>
-<br>
-<br>
-
-<tr><td>
-<li><a href="https://jupyterhub.local">
-jupyterhub</a></li>
-</td><td>
-<small>Interactive Notebook Server</small>
-</td></tr>
-
-<tr><td>
-<li><a href="https://mlflow.local">
-mlflow</a></li>
-</td><td>
-<small>Machine Learning Lifecycle</small>
-</td></tr>
-
-<tr><td>
-<li><a href="https://qdrant.local">
-qdrant</a></li>
-</td><td>
-<small>Vector Database</small>
-</td></tr>
-
-<tr><td>
-<li><a href="https://postgres-ui.local">
-postgres-ui</a></li>
-</td><td>
-<small>Relational Database</small>
-</td></tr>
-
-<tr><td>
-<li><a href="https://minio.local">
-minio</a></li>
-</td><td>
-<small>Object Store</small>
-</td></tr>
-
-<br>
-<br>
-<br>
-<br>
-
-<tr><td>
-<li><a href="https://bash.local">
-BASH</a></li>
-</td><td>
-<small>In-Cluster Bourne Shell</small>
-</td></tr>
-
-<tr><td>
-<li><a href="https://rustpad.local">
-rustpad</a></li>
-</td><td>
-<small>Shared Text Editor</small>
-</td></tr>
-
-<tr><td>
-<li><a href="https://jitsi.local">
-jitsi</a></li>
-</td><td>
-<small>Video Conferencing</small>
-</td></tr>
-
-
-<br>
-<br>
-<br>
-<br>
-
-<tr><td>
-<li><a href="https://kubeshark.local">
-kubeshark</a></li>
-</td><td>
-<small>k8s api call debugging</small>
-</td></tr><tr><td>
-<li><a href="https://hubble.local">
-hubble</a></li>
-</td><td>
-<small>Cilium network observability</small>
-</td></tr>
-<tr><td>
-<li><a href="https://grafana.local">
-grafana</a></li>
-</td><td>
-<small>Metrics Visualization and Alerting</small>
-</td></tr>
-<tr><td>
-<li><a href="https://kubernetes-dashboard.local">
-dashboard</a></li>
-</td><td>
-<small>Kubernetes Dashboard</small>
-</td></tr>
-</table>
-</ul>
-</div>
-
-"""
-
-def ingress_line(ing):
-    host = ing.spec.rules[0].host
-    servicename = ing.spec.rules[0].http.paths[0].backend.service.name
-    serviceport = ing.spec.rules[0].http.paths[0].backend.service.port.number
-    ns = ing.metadata.namespace
-    ingressname = ing.metadata.name
-    try:
-        ip = ing.status.load_balancer.ingress[0].ip,
-    except:
-        ip = "No ip yet"
-
-    return f"<tr><td>{ip[0]}\t</td><td>{host}</td><td># <a href=\"https://{host}\">https://{host} -> ing {ingressname} -> (svc -n {ns} {servicename}:{serviceport})</a></td></tr>\n"
-
-@app.route('/')
+@app.route("/")
 def index():
-    namespace = "default"
-    nodes = "<table>"
-    ingresses = '<pre><small><p>---BEGIN /etc/hosts---</p><table style="font-size:65%">'
-    my_ip = "<h3>My SRC IP: "
-    
-    #config.kube_config.load_kube_config()
-    print("<h2>Cluster:</h2>")
-
-    try:
-        k8s_api = client.CoreV1Api()
-        metrics_api = client.CustomObjectsApi()
-        net_api = client.NetworkingV1Api()
-    except:
-        raise
-    
-    k8s_metrics = metrics_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
-    k8s_nodes = k8s_api.list_node()
-    k8s_ing = net_api.list_ingress_for_all_namespaces(pretty=True)
-
-    for i in range(0, len(k8s_nodes.items)):
-        try:
-            stats = k8s_metrics['items'][i]
-        except:
-            stats['usage']['cpu'] = "0"
-            stats['usage']['memory'] = "0"
-            
-        node = k8s_nodes.items[i]
-        cpu = int(re.sub(r'\D', '', stats['usage']['cpu'])) / int(re.sub(r'\D', '', node.status.capacity['cpu']))/1024/1024/1024 * 100
-        mem = int(re.sub(r'\D', '', stats['usage']['memory'])) / int(re.sub(r'\D', '', node.status.allocatable['memory'])) * 100
-        nodes += "<tr><td>Node Name: %s</td><td>CPU: %3d%%</td><td>Memory: %3d%%</td></tr>" % (
-            stats['metadata']['name'], cpu, mem)
-        
-    ingresses += "# host entries for ingresses present in Aviary k8s cluster"
-    for ing in k8s_ing.items:
-        ingresses += ingress_line(ing) 
-
-    ip = requests.get('https://api.ipify.org')
-    my_ip += ip.text
-
-    my_kube_system_ns_uid = k8s_api.read_namespace("kube-system").metadata.uid
-    
-    nodes += "</table>"
-    ingresses += "</pre><br></table><p>---END---</p></small>"
-    my_ip += "</h3><br>\n"
-
-    log=[]
-    raw_events = k8s_api.list_event_for_all_namespaces().items
-    for event in raw_events:
-        try:
-            log.append(f"{event.last_timestamp} Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})<br>")
-        except:
-            log.append(f"NO TIMESTAMP Event: {event.reason} - {event.message} (Object: {event.involved_object.kind}/{event.involved_object.name})<br>")
-    log.sort(reverse=True)
-    return style_header, menu, "<br>", nodes, "<br>", ingresses, socket.gethostname(), "@", my_ip, my_kube_system_ns_uid, "<hr><br>",  "\n".join(log ),  "<hr></body></html>"
+    d = snapshot()
+    me = os.environ.get("HOSTNAME", "")
+    items = []
+    for host, ns, svc, port, ip in d["routes"]:
+        if svc == "aviary-frontend":
+            continue  # that's us
+        label = host.split(".", 1)[0]
+        blurb = BLURBS.get(label, f"{ns}/{svc}:{port}")
+        items.append(
+            f'<li><a href="https://{html.escape(host)}/">{html.escape(label)}'
+            f"<small>{html.escape(blurb)}</small></a></li>"
+        )
+    items.append('<li><a href="/ca.crt">ca.crt<small>Cluster CA to trust for these sites</small></a></li>')
+    nodes_html = "".join(
+        f"<tr><td>{html.escape(n)}</td><td>{html.escape(r)}</td>"
+        f'<td class="{"ok" if ready == "True" else "bad"}">{html.escape(ready)}</td>'
+        f"<td>{html.escape(v)}</td><td>{cpu}</td><td>{mem}</td></tr>"
+        for n, r, ready, v, cpu, mem in d["nodes"]
+    )
+    by_ip = {}
+    for host, _, _, _, ip in d["routes"]:
+        by_ip.setdefault(ip or "<gateway-ip>", []).append(host)
+    hosts = "\n".join(f"{ip:<16} {' '.join(hs)}" for ip, hs in sorted(by_ip.items()))
+    return PAGE.format(
+        host=html.escape(os.environ.get("BASE_DOMAIN", "")),
+        menu="".join(items),
+        nodes=nodes_html,
+        hosts=html.escape(hosts),
+        me=html.escape(me),
+    )
 
 
-def main_app():
-    try:
-        config.load_incluster_config()
-    except:
-        print("Error: can\'t load incluster config, trying kubeconfig\n")
-        config.kube_config.load_kube_config()
- 
-    run(app=app, debug=True, host='0.0.0.0', port=8086)
+@app.route("/ca")
+@app.route("/ca.crt")
+def ca():
+    pem = ca_pem()
+    if not pem:
+        response.status = 404
+        return f"ClusterIssuer {ISSUER} has no CA secret\n"
+    response.content_type = "application/x-pem-file"
+    response.set_header("Content-Disposition", 'inline; filename="ca.crt"')
+    return pem
 
-main_app()
+
+@app.route("/healthz")
+def healthz():
+    return "ok\n"
+
+
+@app.route("/favicon.ico")
+def favicon():
+    return static_file("favicon.ico", root=HERE)
+
+
+@app.route("/aviary.png")
+def logo():
+    return static_file("aviary004.png", root=HERE)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8086")), debug=True)

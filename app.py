@@ -6,8 +6,9 @@ without touching this app), plus the cluster CA for download and a node
 table.
 
 Env:
-  CLUSTER_ISSUER  cert-manager ClusterIssuer whose CA secret /ca serves
-                  (default ca-issuer; a selfsigned issuer has no CA)
+  CLUSTER_ISSUER  cert-manager ClusterIssuer that signs the Gateway's certs;
+                  /ca.crt serves its root: an ACME issuer's caBundle, or a
+                  CA issuer's secret (default ca-issuer)
   PORT            listen port (default 8086)
 """
 import html
@@ -121,13 +122,21 @@ def _q(s):
 
 
 def ca_pem():
+    """The root to trust for everything the Gateway serves.
+
+    ACME issuer (the platform CA, e.g. step-ca on the management cluster):
+    its caBundle is that root. CA issuer: the ca.crt in its secret.
+    """
+    import base64
+
     cm = client.CustomObjectsApi()
-    issuer = cm.get_cluster_custom_object("cert-manager.io", "v1", "clusterissuers", ISSUER)
-    name = issuer["spec"].get("ca", {}).get("secretName")
+    spec = cm.get_cluster_custom_object("cert-manager.io", "v1", "clusterissuers", ISSUER)["spec"]
+    if spec.get("acme", {}).get("caBundle"):
+        return base64.b64decode(spec["acme"]["caBundle"]).decode()
+    name = spec.get("ca", {}).get("secretName")
     if not name:
         return None
     sec = client.CoreV1Api().read_namespaced_secret(name, "cert-manager")
-    import base64
     data = sec.data.get("ca.crt") or sec.data.get("tls.crt")
     return base64.b64decode(data).decode() if data else None
 

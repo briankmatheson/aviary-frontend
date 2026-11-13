@@ -1,8 +1,16 @@
 # Build and push the landing page image; aviary-deploy's apps/aviary-frontend.tf
-# pulls REGISTRY/aviary-frontend:TAG.
-REGISTRY ?= registry.mesh.harlem.bmath.nyc
-TAG      ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-IMAGE    := $(REGISTRY)/aviary-frontend:$(TAG)
+# pulls aviary_frontend_image (default briankmatheson/aviary-frontend:TAG).
+#
+#   make push                       # Docker Hub (HUB_USER)
+#   make push REGISTRY=registry.example.net   # an internal registry
+#
+# With xdebbie on this box the mesh registry is picked up automatically:
+# registry.<[network] domain in /etc/xdebbie/xdebbied.toml>.
+HUB_USER  ?= briankmatheson
+MESH_ZONE ?= $(shell sed -n 's/^domain *= *"\(.*\)"/\1/p' /etc/xdebbie/xdebbied.toml 2>/dev/null | head -1)
+REGISTRY  ?= $(if $(MESH_ZONE),registry.$(MESH_ZONE),$(HUB_USER))
+TAG       ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+IMAGE     := $(REGISTRY)/aviary-frontend:$(TAG)
 
 .PHONY: build push run rollout
 
@@ -20,5 +28,5 @@ run:
 
 ## Restart the deployment so it pulls :latest again
 rollout:
-	kubectl -n kube-system rollout restart deployment aviary-frontend
-	kubectl -n kube-system rollout status deployment aviary-frontend
+	kubectl -n aviary rollout restart deployment aviary-frontend
+	kubectl -n aviary rollout status deployment aviary-frontend

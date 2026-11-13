@@ -145,8 +145,18 @@ PAGE = """<!doctype html>
 <link rel="icon" href="/favicon.ico">
 <style>
  body {{ font: 16px/1.4 system-ui, sans-serif; margin: 0; color: #222;
-        background: #f4f4f1 url(/aviary.png) no-repeat right -80px top -80px; background-size: 520px; }}
+        background-color: #fbfbf8;
+        background-image:
+          linear-gradient(rgba(70,130,180,.28) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(70,130,180,.28) 1px, transparent 1px),
+          linear-gradient(rgba(70,130,180,.10) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(70,130,180,.10) 1px, transparent 1px);
+        background-size: 100px 100px, 100px 100px, 20px 20px, 20px 20px; }}
  main {{ max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }}
+ nav {{ font-size: 14px; margin-bottom: 8px; }}
+ nav a {{ color: #1a4d8f; text-decoration: none; padding: 4px 10px; background: rgba(255,255,255,.85);
+         border: 1px solid #d8dde5; border-radius: 6px; }}
+ nav a:hover {{ background: #fffbe6; }}
  h1 {{ font-size: 56px; margin: 0 0 4px; letter-spacing: -1px; }}
  h1 small {{ font-size: 16px; color: #666; margin-left: 12px; letter-spacing: 0; }}
  h2 {{ margin: 36px 0 8px; font-size: 18px; color: #555; text-transform: uppercase; letter-spacing: 1px; }}
@@ -162,6 +172,7 @@ PAGE = """<!doctype html>
  .ok {{ color: #1b7f3b; }} .bad {{ color: #b00020; }}
  footer {{ margin-top: 48px; color: #888; font-size: 13px; }}
 </style></head><body><main>
+<nav><a href="/ca.crt" download="ca.crt" title="Cluster CA: trust this to stop the browser warnings">ca.crt</a></nav>
 <h1>Aviary<small>{host}</small></h1>
 <h2>Apps</h2>
 <ul class="menu">{menu}</ul>
@@ -189,7 +200,6 @@ def index():
             f'<li><a href="https://{html.escape(host)}/">{html.escape(label)}'
             f"<small>{html.escape(blurb)}</small></a></li>"
         )
-    items.append('<li><a href="/ca.crt">ca.crt<small>Cluster CA to trust for these sites</small></a></li>')
     nodes_html = "".join(
         f"<tr><td>{html.escape(n)}</td><td>{html.escape(r)}</td>"
         f'<td class="{"ok" if ready == "True" else "bad"}">{html.escape(ready)}</td>'

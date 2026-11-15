@@ -11,13 +11,20 @@ Env:
                   CA issuer's secret (default ca-issuer)
   PORT            listen port (default 8086)
 """
+import base64
+import gzip
 import html
+import json
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import threading
 import time
 
-from bottle import Bottle, response, static_file
+import yaml
+from bottle import Bottle, redirect, response, static_file
 from kubernetes import client, config
 
 app = Bottle()
@@ -121,14 +128,178 @@ def _q(s):
     return float(m.group(1)) * _SUFFIX.get(m.group(2), 1)
 
 
+def _hbytes(n):
+    for u in ("B", "Ki", "Mi", "Gi", "Ti"):
+        if n < 1024:
+            return f"{n:.0f}{u}"
+        n /= 1024
+    return f"{n:.0f}Pi"
+
+
+def _hcpu(cores):
+    return f"{cores * 1000:.0f}m" if cores < 1 else f"{cores:.1f}"
+
+
+def metrics():
+    """Rough per-namespace rollup: summed pod CPU/memory (metrics-server) and
+    total PVC capacity. Apps live one-per-namespace, so keying by namespace is
+    a good-enough stand-in until something reports per-app figures.
+
+    Disk latency/throughput have no source yet (ABE would have to export
+    per-volume IO stats), so they are left out here and shown as '-'.
+    """
+    cm = client.CustomObjectsApi()
+    v1 = client.CoreV1Api()
+    cpu, mem, disk = {}, {}, {}
+    try:
+        for p in cm.list_cluster_custom_object(
+            "metrics.k8s.io", "v1beta1", "pods"
+        ).get("items", []):
+            ns = p["metadata"]["namespace"]
+            for c in p.get("containers", []):
+                cpu[ns] = cpu.get(ns, 0) + _q(c["usage"]["cpu"])
+                mem[ns] = mem.get(ns, 0) + _q(c["usage"]["memory"])
+    except Exception:
+        pass  # metrics-server optional
+    try:
+        for pvc in v1.list_persistent_volume_claim_for_all_namespaces().items:
+            cap = (pvc.status.capacity or {}).get("storage")
+            if cap:
+                ns = pvc.metadata.namespace
+                disk[ns] = disk.get(ns, 0) + _q(cap)
+    except Exception:
+        pass
+    return {"cpu": cpu, "mem": mem, "disk": disk}
+
+
+# ---------------------------------------------------------------------------
+# Helm: the Apps list can stop (helm uninstall) and start (reinstall) a release.
+# Uninstall keeps the release history (--keep-history) and pins the app's PVCs
+# with helm.sh/resource-policy=keep, so the data volumes survive; reinstall
+# rebuilds the chart straight out of the kept release secret and re-adopts those
+# volumes. The pod's ServiceAccount needs cluster-wide rights for this (see
+# aviary-deploy/apps/aviary-frontend.tf).
+# ---------------------------------------------------------------------------
+
+# Helm runs as the pod's ServiceAccount (in-cluster); caches go under /tmp,
+# which is writable for the 'nobody' user the image runs as.
+_HELM_ENV = {
+    **os.environ,
+    "HELM_CACHE_HOME": "/tmp/helm/cache",
+    "HELM_CONFIG_HOME": "/tmp/helm/config",
+    "HELM_DATA_HOME": "/tmp/helm/data",
+}
+
+
+def _helm(*args, timeout=300):
+    return subprocess.run(
+        ["helm", *args], capture_output=True, text=True, env=_HELM_ENV, timeout=timeout
+    )
+
+
+def releases():
+    """{(namespace, name): status} for every Helm release, uninstalled ones
+    (kept history) included, so the menu can tell stopped apps from running."""
+    out = {}
+    try:
+        r = _helm("list", "-A", "-a", "-o", "json", timeout=30)
+        if r.returncode == 0:
+            for rel in json.loads(r.stdout or "[]"):
+                out[(rel["namespace"], rel["name"])] = rel["status"]
+    except Exception:
+        pass  # no helm, or not allowed: just no buttons
+    return out
+
+
+def _release_for(ns, label, rels):
+    """The release backing an app in ns: its label if that is a release, else
+    the sole release in the namespace, else None (ambiguous -> no button)."""
+    if (ns, label) in rels:
+        return label
+    here = [name for (n, name) in rels if n == ns]
+    if label in here:
+        return label
+    return here[0] if len(here) == 1 else None
+
+
+def _release_obj(ns, rel):
+    """The decoded latest Helm release object (embeds the chart + user values).
+
+    A Helm 3 release secret stores base64(gzip(json)); Kubernetes returns that
+    base64-encoded again, so .data['release'] is doubly base64-ed."""
+    v1 = client.CoreV1Api()
+    secs = v1.list_namespaced_secret(ns, label_selector=f"owner=helm,name={rel}").items
+    if not secs:
+        return None
+    s = max(secs, key=lambda x: int(x.metadata.labels.get("version", "0")))
+    blob = gzip.decompress(base64.b64decode(base64.b64decode(s.data["release"])))
+    return json.loads(blob)
+
+
+def _write_chart(chart, parent):
+    """Reconstruct a chart directory (recursively, with subcharts) from the
+    'chart' of a decoded release, and return its path."""
+    meta = chart["metadata"]
+    cdir = os.path.join(parent, meta["name"])
+    os.makedirs(cdir, exist_ok=True)
+    with open(os.path.join(cdir, "Chart.yaml"), "w") as f:
+        yaml.safe_dump(meta, f)
+    if chart.get("values") is not None:
+        with open(os.path.join(cdir, "values.yaml"), "w") as f:
+            yaml.safe_dump(chart["values"], f)
+    if chart.get("schema"):
+        with open(os.path.join(cdir, "values.schema.json"), "wb") as f:
+            f.write(base64.b64decode(chart["schema"]))
+    for group in ("templates", "files"):
+        for t in chart.get(group) or []:
+            p = os.path.join(cdir, t["name"])
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(base64.b64decode(t["data"]))
+    for dep in chart.get("dependencies") or []:
+        _write_chart(dep, os.path.join(cdir, "charts"))
+    return cdir
+
+
+def _keep_pvcs(ns, rel):
+    """Pin an app's PVCs so helm uninstall leaves the data behind. Prefer the
+    release's own PVCs; fall back to every PVC in the namespace (apps here run
+    one per namespace)."""
+    v1 = client.CoreV1Api()
+    pvcs = v1.list_namespaced_persistent_volume_claim(
+        ns, label_selector=f"app.kubernetes.io/instance={rel}"
+    ).items
+    if not pvcs:
+        pvcs = v1.list_namespaced_persistent_volume_claim(ns).items
+    body = {"metadata": {"annotations": {"helm.sh/resource-policy": "keep"}}}
+    for p in pvcs:
+        try:
+            v1.patch_namespaced_persistent_volume_claim(p.metadata.name, ns, body)
+        except Exception:
+            pass
+
+
+def _purge_history(ns, rel):
+    """Drop the kept release secrets so a fresh install can reuse the name."""
+    v1 = client.CoreV1Api()
+    for s in v1.list_namespaced_secret(ns, label_selector=f"owner=helm,name={rel}").items:
+        try:
+            v1.delete_namespaced_secret(s.metadata.name, ns)
+        except Exception:
+            pass
+
+
+def _bump():
+    with _lock:
+        _cache["at"] = 0.0
+
+
 def ca_pem():
     """The root to trust for everything the Gateway serves.
 
     ACME issuer (the platform CA, e.g. step-ca on the management cluster):
     its caBundle is that root. CA issuer: the ca.crt in its secret.
     """
-    import base64
-
     cm = client.CustomObjectsApi()
     spec = cm.get_cluster_custom_object("cert-manager.io", "v1", "clusterissuers", ISSUER)["spec"]
     if spec.get("acme", {}).get("caBundle"):
@@ -144,7 +315,12 @@ def ca_pem():
 def snapshot():
     with _lock:
         if time.time() - _cache["at"] > 15:
-            _cache["data"] = {"routes": routes(), "nodes": nodes()}
+            _cache["data"] = {
+                "routes": routes(),
+                "nodes": nodes(),
+                "metrics": metrics(),
+                "releases": releases(),
+            }
             _cache["at"] = time.time()
         return _cache["data"]
 
@@ -169,11 +345,24 @@ PAGE = """<!doctype html>
  h1 {{ font-size: 56px; margin: 0 0 4px; letter-spacing: -1px; }}
  h1 small {{ font-size: 16px; color: #666; margin-left: 12px; letter-spacing: 0; }}
  h2 {{ margin: 36px 0 8px; font-size: 18px; color: #555; text-transform: uppercase; letter-spacing: 1px; }}
- ul.menu {{ list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }}
- ul.menu li a {{ display: block; padding: 14px 16px; background: rgba(255,255,255,.85); border-radius: 8px;
-                 text-decoration: none; color: #1a4d8f; font-size: 22px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }}
- ul.menu li a:hover {{ background: #fffbe6; }}
- ul.menu li a small {{ display: block; font-size: 13px; color: #666; margin-top: 2px; }}
+ ul.menu {{ list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }}
+ ul.menu li {{ display: flex; align-items: center; gap: 18px; padding: 12px 16px; background: rgba(255,255,255,.85);
+               border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.08); transition: background .1s; }}
+ ul.menu li:hover {{ background: #fffbe6; }}
+ ul.menu li.off {{ opacity: .55; filter: grayscale(1); }}
+ ul.menu li .app {{ flex: 1 1 auto; min-width: 0; }}
+ ul.menu li .app a {{ text-decoration: none; color: #1a4d8f; font-size: 20px; }}
+ ul.menu li.off .app a {{ color: #888; }}
+ ul.menu li .app small {{ display: block; font-size: 13px; color: #666; }}
+ ul.menu li .stats {{ display: flex; gap: 12px; flex: 0 0 auto; }}
+ ul.menu li .stat {{ text-align: right; min-width: 62px; }}
+ ul.menu li .stat b {{ display: block; font-size: 15px; color: #333; font-weight: 600; font-variant-numeric: tabular-nums; }}
+ ul.menu li .stat span {{ font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: .5px; }}
+ ul.menu li .act {{ flex: 0 0 auto; margin: 0; width: 34px; text-align: center; }}
+ ul.menu li .act button {{ cursor: pointer; border: 1px solid #d8dde5; border-radius: 6px; background: #fff;
+                           width: 30px; height: 30px; font-size: 14px; line-height: 1; color: #777; }}
+ ul.menu li .act.stop button:hover {{ background: #ffecec; border-color: #e0a0a0; color: #b00020; }}
+ ul.menu li .act.start button:hover {{ background: #e8f5e9; border-color: #a0cfa5; color: #1b7f3b; }}
  table {{ border-collapse: collapse; background: rgba(255,255,255,.85); width: 100%; font-size: 14px; }}
  th, td {{ text-align: left; padding: 6px 10px; border-bottom: 1px solid #e3e3df; }}
  th {{ color: #666; font-weight: 600; }}
@@ -200,14 +389,42 @@ def index():
     d = snapshot()
     me = os.environ.get("HOSTNAME", "")
     items = []
+    m = d["metrics"]
+    rels = d["releases"]
     for host, ns, svc, port, ip in d["routes"]:
         if svc == "aviary-frontend":
             continue  # that's us
         label = host.split(".", 1)[0]
         blurb = BLURBS.get(label, f"{ns}/{svc}:{port}")
+        mem = _hbytes(m["mem"][ns]) if ns in m["mem"] else "-"
+        cpu = _hcpu(m["cpu"][ns]) if ns in m["cpu"] else "-"
+        disk = _hbytes(m["disk"][ns]) if ns in m["disk"] else "-"
+        rel = _release_for(ns, label, rels)
+        off = bool(rel) and rels.get((ns, rel)) == "uninstalled"
+        if not rel:
+            act = '<div class="act"></div>'  # not a helm release: no button
+        else:
+            verb, cls, icon, tip = (
+                ("install", "start", "&#9654;", "reinstall (re-attaches the same volumes)")
+                if off
+                else ("uninstall", "stop", "&#9632;", "helm uninstall (keeps volumes)")
+            )
+            act = (
+                f'<form class="act {cls}" method="post" '
+                f'action="/app/{html.escape(ns)}/{html.escape(rel)}/{verb}">'
+                f'<button title="{tip}">{icon}</button></form>'
+            )
         items.append(
-            f'<li><a href="https://{html.escape(host)}/">{html.escape(label)}'
-            f"<small>{html.escape(blurb)}</small></a></li>"
+            f'<li class="{"off" if off else ""}"><div class="app">'
+            f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>'
+            f"<small>{html.escape(blurb)}</small></div>"
+            f'<div class="stats">'
+            f'<div class="stat"><b>{mem}</b><span>mem</span></div>'
+            f'<div class="stat"><b>{cpu}</b><span>cpu</span></div>'
+            f'<div class="stat"><b>{disk}</b><span>disk</span></div>'
+            f'<div class="stat"><b>&mdash;</b><span>lat</span></div>'
+            f'<div class="stat"><b>&mdash;</b><span>tput</span></div>'
+            f"</div>{act}</li>"
         )
     nodes_html = "".join(
         f"<tr><td>{html.escape(n)}</td><td>{html.escape(r)}</td>"
@@ -226,6 +443,44 @@ def index():
         hosts=html.escape(hosts),
         me=html.escape(me),
     )
+
+
+@app.route("/app/<ns>/<rel>/uninstall", method="POST")
+def app_stop(ns, rel):
+    """Stop an app: pin its PVCs so the data survives, then helm uninstall
+    keeping the release history (the chart to reinstall from lives in it)."""
+    _keep_pvcs(ns, rel)
+    r = _helm("uninstall", rel, "-n", ns, "--keep-history", timeout=300)
+    _bump()
+    if r.returncode != 0:
+        response.status = 500
+        return f"helm uninstall {rel} failed:\n{r.stderr}"
+    redirect("/")
+
+
+@app.route("/app/<ns>/<rel>/install", method="POST")
+def app_start(ns, rel):
+    """Start a stopped app: rebuild the chart from the kept release secret and
+    install it again, re-adopting the volumes left behind."""
+    obj = _release_obj(ns, rel)
+    if not obj:
+        response.status = 404
+        return f"no saved release for {rel} in {ns}\n"
+    work = tempfile.mkdtemp(prefix="chart-", dir="/tmp")
+    try:
+        cdir = _write_chart(obj["chart"], work)
+        vals = os.path.join(work, "values.yaml")
+        with open(vals, "w") as f:
+            yaml.safe_dump(obj.get("config") or {}, f)
+        _purge_history(ns, rel)
+        r = _helm("install", rel, cdir, "-n", ns, "-f", vals, "--wait=false", timeout=600)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    _bump()
+    if r.returncode != 0:
+        response.status = 500
+        return f"helm install {rel} failed:\n{r.stderr}"
+    redirect("/")
 
 
 @app.route("/ca")

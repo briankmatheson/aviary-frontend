@@ -30,6 +30,11 @@ from kubernetes import client, config
 app = Bottle()
 HERE = os.path.dirname(os.path.abspath(__file__))
 ISSUER = os.environ.get("CLUSTER_ISSUER", "ca-issuer")
+BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "")
+# Download the CA as ca.<domain>.crt, not a generic ca.crt: a per-cluster name
+# installs alongside other clusters' roots instead of colliding with them in the
+# trust store (several roots share the CN "Internal CA Root CA").
+CA_FILENAME = f"ca.{BASE_DOMAIN}.crt" if BASE_DOMAIN else "ca.crt"
 
 # What each app is for. Keyed by the first label of the hostname; anything
 # not listed still appears, just without a blurb.
@@ -384,7 +389,7 @@ PAGE = """<!doctype html>
  .ok {{ color: #1b7f3b; }} .bad {{ color: #b00020; }}
  footer {{ margin-top: 48px; color: #888; font-size: 13px; }}
 </style></head><body><main>
-<nav><a href="/ca.crt" download="ca.crt" title="Cluster CA: trust this to stop the browser warnings">ca.crt</a></nav>
+<nav><a href="/{ca_name}" download="{ca_name}" title="Cluster CA: trust this to stop the browser warnings">{ca_name}</a></nav>
 <h1>Aviary<small>{host}</small></h1>
 {fortune}
 <h2>Apps</h2>
@@ -455,6 +460,7 @@ def index():
     fort_html = f'<pre class="fortune">{html.escape(fort)}</pre>' if fort else ""
     return PAGE.format(
         host=html.escape(os.environ.get("BASE_DOMAIN", "")),
+        ca_name=html.escape(CA_FILENAME),
         fortune=fort_html,
         menu="".join(items),
         nodes=nodes_html,
@@ -509,8 +515,13 @@ def ca():
         response.status = 404
         return f"ClusterIssuer {ISSUER} has no CA secret\n"
     response.content_type = "application/x-pem-file"
-    response.set_header("Content-Disposition", 'inline; filename="ca.crt"')
+    response.set_header("Content-Disposition", f'inline; filename="{CA_FILENAME}"')
     return pem
+
+
+# Also serve it at /ca.<domain>.crt so the URL basename is the per-cluster name.
+if CA_FILENAME != "ca.crt":
+    app.route(f"/{CA_FILENAME}")(ca)
 
 
 @app.route("/healthz")

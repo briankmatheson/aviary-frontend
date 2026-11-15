@@ -294,6 +294,18 @@ def _bump():
         _cache["at"] = 0.0
 
 
+def _fortune():
+    """A fresh short fortune for the banner, run on every page load (not
+    cached). /usr/games is not on nobody's PATH, so call it by full path."""
+    try:
+        r = subprocess.run(
+            ["/usr/games/fortune", "-s"], capture_output=True, text=True, timeout=5
+        )
+        return r.stdout.rstrip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
 def ca_pem():
     """The root to trust for everything the Gateway serves.
 
@@ -367,11 +379,14 @@ PAGE = """<!doctype html>
  th, td {{ text-align: left; padding: 6px 10px; border-bottom: 1px solid #e3e3df; }}
  th {{ color: #666; font-weight: 600; }}
  pre {{ background: rgba(255,255,255,.85); padding: 12px; overflow-x: auto; font-size: 13px; }}
+ pre.fortune {{ border-left: 3px solid #4682b4; padding: 10px 14px; margin: 8px 0 0;
+                font-size: 13px; color: #555; font-style: italic; white-space: pre-wrap; }}
  .ok {{ color: #1b7f3b; }} .bad {{ color: #b00020; }}
  footer {{ margin-top: 48px; color: #888; font-size: 13px; }}
 </style></head><body><main>
 <nav><a href="/ca.crt" download="ca.crt" title="Cluster CA: trust this to stop the browser warnings">ca.crt</a></nav>
 <h1>Aviary<small>{host}</small></h1>
+{fortune}
 <h2>Apps</h2>
 <ul class="menu">{menu}</ul>
 <h2>Cluster</h2>
@@ -436,8 +451,11 @@ def index():
     for host, _, _, _, ip in d["routes"]:
         by_ip.setdefault(ip or "<gateway-ip>", []).append(host)
     hosts = "\n".join(f"{ip:<16} {' '.join(hs)}" for ip, hs in sorted(by_ip.items()))
+    fort = _fortune()
+    fort_html = f'<pre class="fortune">{html.escape(fort)}</pre>' if fort else ""
     return PAGE.format(
         host=html.escape(os.environ.get("BASE_DOMAIN", "")),
+        fortune=fort_html,
         menu="".join(items),
         nodes=nodes_html,
         hosts=html.escape(hosts),

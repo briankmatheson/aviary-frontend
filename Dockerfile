@@ -3,6 +3,7 @@ FROM debian:bookworm-slim
 ARG HELM_VERSION=v3.16.4
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-bottle python3-kubernetes python3-yaml gunicorn curl ca-certificates \
+        fortune-mod fortunes-min \
     && curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
         | tar -xz -C /tmp \
     && mv /tmp/linux-amd64/helm /usr/local/bin/helm \

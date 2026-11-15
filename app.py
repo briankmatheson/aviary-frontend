@@ -381,7 +381,13 @@ PAGE = """<!doctype html>
  nav a {{ color: #1a4d8f; text-decoration: none; padding: 4px 10px; background: rgba(255,255,255,.85);
          border: 1px solid #d8dde5; border-radius: 6px; }}
  nav a:hover {{ background: #fffbe6; }}
- nav .who {{ color: #666; margin-left: 10px; }}
+ .hdr {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }}
+ .corner {{ text-align: right; font-size: 14px; flex: 0 0 auto; }}
+ .corner .host {{ color: #555; font-weight: 600; }}
+ .corner .acct {{ margin-top: 3px; }}
+ .corner .acct .who {{ color: #999; margin-right: 8px; }}
+ .corner .acct a {{ color: #1a4d8f; text-decoration: none; }}
+ .corner .acct a:hover {{ text-decoration: underline; }}
  h1 {{ font-size: 56px; margin: 0 0 4px; letter-spacing: -1px; }}
  h1 small {{ font-size: 16px; color: #666; margin-left: 12px; letter-spacing: 0; }}
  h2 {{ margin: 36px 0 8px; font-size: 18px; color: #555; text-transform: uppercase; letter-spacing: 1px; }}
@@ -412,8 +418,11 @@ PAGE = """<!doctype html>
  .ok {{ color: #1b7f3b; }} .bad {{ color: #b00020; }}
  footer {{ margin-top: 48px; color: #888; font-size: 13px; }}
 </style></head><body><main>
-<nav><a href="/{ca_name}" download="{ca_name}" title="Cluster CA: trust this to stop the browser warnings">{ca_name}</a>{auth_nav}</nav>
-<h1>Aviary<small>{host}</small></h1>
+<div class="hdr">
+<nav><a href="/{ca_name}" download="{ca_name}" title="Cluster CA: trust this to stop the browser warnings">{ca_name}</a></nav>
+<div class="corner"><div class="host">{host}</div>{auth_nav}</div>
+</div>
+<h1>Aviary</h1>
 {fortune}
 <h2>Apps</h2>
 <ul class="menu">{menu}</ul>
@@ -514,8 +523,15 @@ def oauth_callback():
 
 @app.route("/logout")
 def logout():
-    response.delete_cookie("aviary_session", path="/")
-    redirect("/login" if AUTH_ENABLED else "/")
+    response.delete_cookie("aviary_session", path="/", secure=True, samesite="lax")
+    # Don't bounce to /login: gitea's SSO session is still live, so it would
+    # silently re-authenticate and the logout would look like it did nothing.
+    return (
+        "<!doctype html><meta charset=utf-8><title>Aviary</title>"
+        '<body style="font:16px/1.5 system-ui,sans-serif;text-align:center;'
+        'padding:64px;color:#333">Logged out. '
+        '<a href="/login">Log in again</a></body>'
+    )
 
 
 @app.route("/")
@@ -575,8 +591,9 @@ def index():
     if AUTH_ENABLED:
         u = _session_user()
         auth_nav = (
-            f'<span class="who">{html.escape(u)}</span> <a href="/logout">log out</a>'
-            if u else '<a href="/login">log in</a>'
+            f'<div class="acct"><span class="who">{html.escape(u)}</span>'
+            f'<a href="/logout">log out</a></div>'
+            if u else '<div class="acct"><a href="/login">log in</a></div>'
         )
     else:
         auth_nav = ""

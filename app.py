@@ -13,18 +13,22 @@ Env:
 """
 import base64
 import gzip
+import hmac
 import html
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
+import urllib.parse
+import urllib.request
 
 import yaml
-from bottle import Bottle, redirect, response, static_file
+from bottle import Bottle, HTTPError, redirect, request, response, static_file
 from kubernetes import client, config
 
 app = Bottle()
@@ -35,6 +39,24 @@ BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "")
 # installs alongside other clusters' roots instead of colliding with them in the
 # trust store (several roots share the CN "Internal CA Root CA").
 CA_FILENAME = f"ca.{BASE_DOMAIN}.crt" if BASE_DOMAIN else "ca.crt"
+
+# --- Authentication (optional): log in via the local gitea's OAuth2, with a
+# shared-token bypass for automation. All inert unless the OAuth env is set, so
+# the page still runs without it. Server-to-server calls to gitea use its
+# in-cluster http service (GITEA_INTERNAL) so no extra TLS trust is needed. ---
+OAUTH_CLIENT_ID = os.environ.get("OAUTH_CLIENT_ID", "")
+OAUTH_CLIENT_SECRET = os.environ.get("OAUTH_CLIENT_SECRET", "")
+OAUTH_ISSUER = os.environ.get("OAUTH_ISSUER", "").rstrip("/")      # browser-facing gitea
+GITEA_INTERNAL = os.environ.get("GITEA_INTERNAL", "").rstrip("/")  # in-cluster gitea (http)
+BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")             # https://<base_domain>
+SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
+BYPASS_TOKEN = os.environ.get("BYPASS_TOKEN", "")
+ADMIN_ONLY = os.environ.get("OAUTH_ADMIN_ONLY", "false").lower() in ("1", "true", "yes")
+AUTH_ENABLED = bool(OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET and OAUTH_ISSUER and SESSION_SECRET and BASE_URL)
+REDIRECT_URI = f"{BASE_URL}/oauth/callback"
+_GITEA_API = GITEA_INTERNAL or OAUTH_ISSUER
+_PUBLIC_PATHS = {"/healthz", "/ca", "/ca.crt", "/favicon.ico", "/aviary.png",
+                 "/login", "/logout", "/oauth/callback", f"/{CA_FILENAME}"}
 
 # What each app is for. Keyed by the first label of the hostname; anything
 # not listed still appears, just without a blurb.
@@ -359,6 +381,7 @@ PAGE = """<!doctype html>
  nav a {{ color: #1a4d8f; text-decoration: none; padding: 4px 10px; background: rgba(255,255,255,.85);
          border: 1px solid #d8dde5; border-radius: 6px; }}
  nav a:hover {{ background: #fffbe6; }}
+ nav .who {{ color: #666; margin-left: 10px; }}
  h1 {{ font-size: 56px; margin: 0 0 4px; letter-spacing: -1px; }}
  h1 small {{ font-size: 16px; color: #666; margin-left: 12px; letter-spacing: 0; }}
  h2 {{ margin: 36px 0 8px; font-size: 18px; color: #555; text-transform: uppercase; letter-spacing: 1px; }}
@@ -389,7 +412,7 @@ PAGE = """<!doctype html>
  .ok {{ color: #1b7f3b; }} .bad {{ color: #b00020; }}
  footer {{ margin-top: 48px; color: #888; font-size: 13px; }}
 </style></head><body><main>
-<nav><a href="/{ca_name}" download="{ca_name}" title="Cluster CA: trust this to stop the browser warnings">{ca_name}</a></nav>
+<nav><a href="/{ca_name}" download="{ca_name}" title="Cluster CA: trust this to stop the browser warnings">{ca_name}</a>{auth_nav}</nav>
 <h1>Aviary<small>{host}</small></h1>
 {fortune}
 <h2>Apps</h2>
@@ -402,6 +425,97 @@ PAGE = """<!doctype html>
 <footer>Served by {me}</footer>
 </main></body></html>
 """
+
+
+def _http_post_form(url, data):
+    body = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(
+        url, data=body, method="POST", headers={"Accept": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read().decode())
+
+
+def _http_get_json(url, bearer):
+    req = urllib.request.Request(
+        url, headers={"Authorization": f"Bearer {bearer}", "Accept": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read().decode())
+
+
+def _bypass_ok():
+    if not BYPASS_TOKEN:
+        return False
+    auth = request.get_header("Authorization", "") or ""
+    tok = auth[7:] if auth.startswith("Bearer ") else ""
+    tok = tok or request.get_header("X-Aviary-Token", "") or request.query.get("token", "")
+    return bool(tok) and hmac.compare_digest(tok, BYPASS_TOKEN)
+
+
+def _session_user():
+    try:
+        return request.get_cookie("aviary_session", secret=SESSION_SECRET)
+    except Exception:
+        return None
+
+
+@app.hook("before_request")
+def _auth_gate():
+    if not AUTH_ENABLED or request.path in _PUBLIC_PATHS:
+        return
+    if _bypass_ok() or _session_user():
+        return
+    if request.method == "GET":
+        redirect("/login")
+    raise HTTPError(401, "authentication required\n")
+
+
+@app.route("/login")
+def login():
+    if not AUTH_ENABLED:
+        redirect("/")
+    state = secrets.token_urlsafe(16)
+    response.set_cookie("oauth_state", state, secret=SESSION_SECRET, httponly=True,
+                        secure=True, samesite="lax", max_age=600, path="/")
+    q = urllib.parse.urlencode({
+        "client_id": OAUTH_CLIENT_ID, "redirect_uri": REDIRECT_URI,
+        "response_type": "code", "state": state,
+    })
+    redirect(f"{OAUTH_ISSUER}/login/oauth/authorize?{q}")
+
+
+@app.route("/oauth/callback")
+def oauth_callback():
+    if not AUTH_ENABLED:
+        redirect("/")
+    saved = request.get_cookie("oauth_state", secret=SESSION_SECRET)
+    if not saved or request.query.get("state") != saved:
+        raise HTTPError(400, "bad OAuth state")
+    code = request.query.get("code", "")
+    if not code:
+        raise HTTPError(400, "no authorization code")
+    tok = _http_post_form(f"{_GITEA_API}/login/oauth/access_token", {
+        "grant_type": "authorization_code", "client_id": OAUTH_CLIENT_ID,
+        "client_secret": OAUTH_CLIENT_SECRET, "code": code, "redirect_uri": REDIRECT_URI,
+    })
+    access = tok.get("access_token")
+    if not access:
+        raise HTTPError(502, "token exchange failed")
+    user = _http_get_json(f"{_GITEA_API}/api/v1/user", access)
+    username = user.get("login") or user.get("username") or "?"
+    if ADMIN_ONLY and not user.get("is_admin"):
+        raise HTTPError(403, f"{username} is not an admin")
+    response.delete_cookie("oauth_state", path="/")
+    response.set_cookie("aviary_session", username, secret=SESSION_SECRET, httponly=True,
+                        secure=True, samesite="lax", max_age=43200, path="/")
+    redirect("/")
+
+
+@app.route("/logout")
+def logout():
+    response.delete_cookie("aviary_session", path="/")
+    redirect("/login" if AUTH_ENABLED else "/")
 
 
 @app.route("/")
@@ -458,9 +572,18 @@ def index():
     hosts = "\n".join(f"{ip:<16} {' '.join(hs)}" for ip, hs in sorted(by_ip.items()))
     fort = _fortune()
     fort_html = f'<pre class="fortune">{html.escape(fort)}</pre>' if fort else ""
+    if AUTH_ENABLED:
+        u = _session_user()
+        auth_nav = (
+            f'<span class="who">{html.escape(u)}</span> <a href="/logout">log out</a>'
+            if u else '<a href="/login">log in</a>'
+        )
+    else:
+        auth_nav = ""
     return PAGE.format(
         host=html.escape(os.environ.get("BASE_DOMAIN", "")),
         ca_name=html.escape(CA_FILENAME),
+        auth_nav=auth_nav,
         fortune=fort_html,
         menu="".join(items),
         nodes=nodes_html,

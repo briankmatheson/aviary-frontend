@@ -115,7 +115,8 @@ EXPOSURES = (
     ("public", os.environ.get("PUBLIC_GATEWAY", "aviary-nat")),
 )
 
-# Chat window: a small panel on the page that talks to a model served inside
+# Chat window: a panel at the top of the page, beside the title and fortune
+# and under the account corner, that talks to a model served inside
 # the cluster (Ollama on the GPU node) through its OpenAI-compatible API. The
 # browser only ever talks to this app (/api/chat, behind the same login as the
 # rest of the page); this app relays to the model. Inert unless CHAT_URL is set.
@@ -1019,20 +1020,17 @@ SW_CSS = """
 """
 
 CHAT_CSS = """
- #chat-toggle { position: fixed; right: 22px; bottom: 22px; z-index: 900; width: 52px; height: 52px; border: 0;
-   border-radius: 50%; background: #1a4d8f; color: #fff; font-size: 24px; line-height: 1; cursor: pointer;
-   box-shadow: 0 4px 14px rgba(0,0,0,.3); }
- #chat-toggle:hover { background: #163f75; }
- #chat { position: fixed; right: 22px; bottom: 86px; z-index: 900; width: min(400px, calc(100vw - 28px));
-   height: min(560px, calc(100vh - 110px)); display: flex; flex-direction: column; background: #fff;
-   border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.3); overflow: hidden; font: 14px/1.45 system-ui, sans-serif; }
- #chat[hidden] { display: none; }
- #chat .chat-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #1a4d8f; color: #fff; }
- #chat .chat-head b { flex: 1 1 auto; font-size: 15px; }
+ .top { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+ .top-l { flex: 1 1 320px; min-width: 0; }
+ #chat { flex: 0 1 400px; min-width: 280px; height: 270px; margin-top: 6px; display: flex; flex-direction: column;
+   background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.15); overflow: hidden;
+   font: 14px/1.45 system-ui, sans-serif; }
+ #chat .chat-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #1a4d8f; color: #fff; }
+ #chat .chat-head b { flex: 1 1 auto; font-size: 14px; }
  #chat .chat-head small { font-weight: 400; opacity: .75; margin-left: 6px; }
  #chat .chat-head button { border: 0; background: none; color: #fff; cursor: pointer; font-size: 13px; opacity: .8; padding: 2px 6px; }
  #chat .chat-head button:hover { opacity: 1; }
- #chat .chat-log { flex: 1 1 auto; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px;
+ #chat .chat-log { flex: 1 1 auto; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px;
    background: #f5f6f8; }
  #chat .chat-log .hint { margin: auto; color: #999; font-size: 13px; text-align: center; }
  #chat .msg { max-width: 88%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -1041,8 +1039,8 @@ CHAT_CSS = """
    box-shadow: 0 1px 2px rgba(0,0,0,.08); }
  #chat .msg.pending:empty::after { content: "\\2026"; color: #999; }
  #chat .msg.err { background: #ffecec; color: #b00020; }
- #chat form { display: flex; gap: 8px; padding: 10px; margin: 0; border-top: 1px solid #e3e6eb; background: #fff; }
- #chat textarea { flex: 1 1 auto; resize: none; height: 40px; max-height: 120px; padding: 9px 10px; border: 1px solid #d8dde5;
+ #chat form { display: flex; gap: 8px; padding: 8px; margin: 0; border-top: 1px solid #e3e6eb; background: #fff; }
+ #chat textarea { flex: 1 1 auto; min-width: 0; resize: none; height: 36px; padding: 7px 10px; border: 1px solid #d8dde5;
    border-radius: 8px; font: inherit; }
  #chat textarea:focus { outline: 2px solid #9db8dc; border-color: #9db8dc; }
  #chat form button { flex: 0 0 auto; padding: 0 14px; border: 0; border-radius: 8px; background: #1a4d8f; color: #fff;
@@ -1051,11 +1049,9 @@ CHAT_CSS = """
 """
 
 CHAT_HTML = """
-<button id="chat-toggle" type="button" title="Chat with __MODEL__" aria-controls="chat" aria-expanded="false">&#128172;</button>
-<section id="chat" hidden aria-label="Chat">
+<section id="chat" aria-label="Chat">
  <div class="chat-head"><b>Chat<small>__MODEL__</small></b>
-  <button type="button" class="clear" title="forget this conversation">clear</button>
-  <button type="button" class="close" title="close" aria-label="close">&#10005;</button></div>
+  <button type="button" class="clear" title="forget this conversation">clear</button></div>
  <div class="chat-log" aria-live="polite"></div>
  <form><textarea placeholder="Ask something&hellip;" aria-label="Message"></textarea><button>Send</button></form>
 </section>
@@ -1063,7 +1059,7 @@ CHAT_HTML = """
 // Chat window. The conversation lives in this tab (sessionStorage) and is sent
 // whole with each turn to /api/chat, which streams the reply back as plain text.
 (function () {
-  var box = document.getElementById('chat'), toggle = document.getElementById('chat-toggle');
+  var box = document.getElementById('chat');
   if (!box || !window.fetch) return;
   var log = box.querySelector('.chat-log'), form = box.querySelector('form');
   var ta = form.querySelector('textarea'), go = form.querySelector('button');
@@ -1085,11 +1081,6 @@ CHAT_HTML = """
       h.textContent = 'Running on the GPU in this cluster.'; log.appendChild(h);
     }
     msgs.forEach(function (m) { bubble(m.role, m.content); });
-  }
-  function show(on) {
-    box.hidden = !on; toggle.setAttribute('aria-expanded', on ? 'true' : 'false');
-    store('chat-open', on ? '1' : '');
-    if (on) { bottom(); ta.focus(); }
   }
   function done() { busy = null; go.textContent = 'Send'; go.classList.remove('stop'); store('chat', JSON.stringify(msgs)); }
   function send() {
@@ -1130,11 +1121,8 @@ CHAT_HTML = """
   ta.onkeydown = function (e) {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!busy) send(); }
   };
-  toggle.onclick = function () { show(box.hidden); };
-  box.querySelector('.close').onclick = function () { show(false); };
   box.querySelector('.clear').onclick = function () { if (busy) busy.abort(); msgs = []; store('chat', '[]'); redraw(); };
   redraw();
-  if (load('chat-open')) show(true);
 })();
 </script>
 """
@@ -1473,8 +1461,10 @@ PAGE = """<!doctype html>
 <nav><a href="/{ca_name}" download="{ca_name}" title="Cluster CA: trust this to stop the browser warnings">{ca_name}</a></nav>
 <div class="corner"><div class="host">{host}</div>{auth_nav}</div>
 </div>
+<div class="top"><div class="top-l">
 <h1>Aviary</h1>
 {fortune}
+</div>{chat}</div>
 <h2>Apps</h2>
 <ul class="menu">{menu}</ul>
 {system}
@@ -1740,9 +1730,8 @@ def index():
         hosts=html.escape(hosts),
         me=html.escape(me),
         rl_css=RL_CSS + IMG_CSS + SW_CSS + (CHAT_CSS if CHAT_ENABLED else ""),
-        rl_html=RL_HTML + IMG_HTML + (
-            CHAT_HTML.replace("__MODEL__", html.escape(CHAT_MODEL)) if CHAT_ENABLED else ""
-        ),
+        rl_html=RL_HTML + IMG_HTML,
+        chat=CHAT_HTML.replace("__MODEL__", html.escape(CHAT_MODEL)) if CHAT_ENABLED else "",
         splash_css=SPLASH_CSS,
         splash_html=SPLASH_HTML,
     )

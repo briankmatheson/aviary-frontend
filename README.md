@@ -25,8 +25,8 @@ entries have none. Override the names with `GATEWAY_NAMESPACE`,
 `PRIVATE_GATEWAY`, `PUBLIC_GATEWAY`.
 
 With `CHAT_URL` set to an OpenAI-compatible API (the cluster's Ollama:
-`http://ollama.aviary-ollama.svc:11434/v1`) the page gets a chat window in the
-bottom-right corner, talking to `CHAT_MODEL` (default `llama3`). The browser
+`http://ollama.aviary-ollama.svc:11434/v1`) the page gets a chat window at the
+top right (beside the fortune), talking to `CHAT_MODEL` (default `llama3`). The browser
 only talks to this app; `/api/chat` relays to the model and streams the reply.
 
 Env: `CLUSTER_ISSUER` (default `ca-issuer`), `BASE_DOMAIN` (shown in the

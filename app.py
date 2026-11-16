@@ -16,6 +16,9 @@ Env:
   CHAT_MODEL      model the chat window talks to (default llama3)
   CHAT_NICK       the model's name in the room (default: the model name's
                   leading letters, e.g. llama)
+  CHAT_HTTP_NETS  networks the model's http_get tool may connect to, comma
+                  separated CIDRs (default 10.23.0.0/16: the cluster's own
+                  network, not the internet)
   CHAT_SERVICE_ACCOUNT
                   ServiceAccount (in this namespace) whose rights the model's
                   cluster lookups run with; bind it read-only (default aviary-chat)
@@ -27,6 +30,8 @@ import base64
 import gzip
 import hmac
 import html
+import http.client
+import ipaddress
 import json
 import math
 import os
@@ -143,11 +148,20 @@ CHAT_ROOM_KEEP = 300       # lines the room remembers (in memory: a restart empt
 #                   token for a *different* ServiceAccount, CHAT_SERVICE_ACCOUNT,
 #                   which aviary-deploy binds to read-only roles that leave
 #                   Secrets out. No such account, no cluster lookups.
-#   http_get        fetch a URL (http/https, GET only) from inside the cluster:
-#                   the web at large and in-cluster services alike.
+#   http_get        fetch a URL (http/https, GET only), but only from hosts on
+#                   CHAT_HTTP_NETS -- by default the cluster's own network, so
+#                   the gateways and their apps, and nothing on the internet.
+#                   Enforced on the connection itself (the peer's address is
+#                   checked before a byte is sent), so a redirect or a DNS
+#                   name pointing elsewhere does not get around it.
 #
 # Both return text, capped so one call cannot swamp the conversation.
 CHAT_SERVICE_ACCOUNT = os.environ.get("CHAT_SERVICE_ACCOUNT", "aviary-chat")
+CHAT_HTTP_NETS = [
+    ipaddress.ip_network(n.strip(), strict=False)
+    for n in os.environ.get("CHAT_HTTP_NETS", "10.23.0.0/16").split(",") if n.strip()
+]
+_CHAT_NETS_TEXT = ", ".join(str(n) for n in CHAT_HTTP_NETS)
 CHAT_TOOL_ROUNDS = 8       # tool-calling rounds per reply before it must answer
 CHAT_TOOL_CHARS = 12000    # of one tool result handed to the model
 CHAT_TOOLS = [
@@ -172,7 +186,8 @@ CHAT_TOOLS = [
         "name": "http_get",
         "description": (
             "Fetch a URL with an HTTP GET and return its text (HTML is reduced to plain text). "
-            "Works for the public web and for services inside the cluster."
+            f"Only hosts on this cluster's own network ({_CHAT_NETS_TEXT}) can be reached -- the apps "
+            "this cluster serves, by their URLs. The internet cannot."
         ),
         "parameters": {"type": "object", "required": ["url"], "properties": {
             "url": {"type": "string", "description": "http:// or https:// URL"},
@@ -1913,6 +1928,52 @@ def chat_kubernetes_get(path, fmt="table"):
 _TAGS = re.compile(r"(?is)<(script|style|noscript|svg|head)\b.*?</\1>|<!--.*?-->|<[^>]+>")
 
 
+class _OffNet(Exception):
+    """The peer is outside CHAT_HTTP_NETS."""
+
+
+def _check_peer(sock):
+    """Refuse a connection whose far end is not on an allowed network."""
+    peer = ipaddress.ip_address(sock.getpeername()[0])
+    if getattr(peer, "ipv4_mapped", None):
+        peer = peer.ipv4_mapped
+    if not any(peer in net for net in CHAT_HTTP_NETS):
+        sock.close()
+        raise _OffNet(f"{peer} is outside {_CHAT_NETS_TEXT}, the only network reachable from here")
+
+
+class _NetHTTP(http.client.HTTPConnection):
+    def connect(self):
+        super().connect()
+        _check_peer(self.sock)
+
+
+class _NetHTTPS(http.client.HTTPSConnection):
+    def connect(self):
+        # As HTTPSConnection.connect, with the check between TCP and TLS, so
+        # not even a handshake goes to a host that is off the allowed networks.
+        http.client.HTTPConnection.connect(self)
+        _check_peer(self.sock)
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=self._tunnel_host or self.host)
+
+
+class _NetHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_NetHTTP, req)
+
+
+class _NetHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_NetHTTPS, req, context=self._context)
+
+
+def _net_opener():
+    """An opener every connection of which -- redirects included -- is held to
+    CHAT_HTTP_NETS. No proxies: they would be the peer instead of the target."""
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _NetHTTPHandler(), _NetHTTPSHandler(context=_trust_context()))
+
+
 def chat_http_get(url):
     """The http_get tool: fetch one URL, return status, type and text."""
     url = str(url or "").strip()
@@ -1920,12 +1981,15 @@ def chat_http_get(url):
         return "error: only http:// and https:// URLs"
     req = urllib.request.Request(url, headers={"User-Agent": "aviary-chat/1.0", "Accept": "*/*"})
     try:
-        with urllib.request.urlopen(req, timeout=15, context=_trust_context()) as r:
+        with _net_opener().open(req, timeout=15) as r:
             raw, status = r.read(400_000), r.status
             ctype = r.headers.get("Content-Type", "")
     except urllib.error.HTTPError as e:
         return f"HTTP {e.code} {e.reason}\n\n" + _clip(e.read(4000).decode("utf-8", "replace"), 2000)
     except Exception as e:
+        cause = e.reason if isinstance(e, urllib.error.URLError) else e
+        if isinstance(cause, _OffNet):
+            return f"error: not allowed: {cause}"
         return f"error: {e}"
     if ctype and not re.search(r"text|json|xml|yaml|javascript|csv", ctype, re.I):
         return f"HTTP {status} {ctype}\n\n(not text: {len(raw)} bytes)"
@@ -2122,7 +2186,8 @@ def _chat_system():
         "as plain text with no <nick> prefix of your own. "
         "You run on the cluster's own GPU. Be brief and direct. You can look things up: "
         "kubernetes_get reads this cluster's live state (read-only, no Secrets) and http_get "
-        "fetches web pages and in-cluster services. Use them rather than guess, and say what "
+        f"fetches pages from this cluster's own network only ({_CHAT_NETS_TEXT}: the apps "
+        "listed below); you have no internet access. Use them rather than guess, and say what "
         "you found; do not use them for small talk or questions you can answer outright. If a "
         "lookup fails, correct it and try again before giving up. Call one tool at a time and "
         "wait for its result before the next. Lists "

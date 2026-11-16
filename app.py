@@ -1091,9 +1091,10 @@ SW_CSS = """
 
 CHAT_CSS = """
  .top { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
- .top-l { flex: 1 1 320px; min-width: 0; }
+ /* Two equal columns: the fortune box and the chat box are the same width. */
+ .top-l { flex: 1 1 0; min-width: 280px; }
  /* The fortune box's twin: same paper, same type, its rule on the right. */
- #chat { flex: 0 1 400px; min-width: 280px; height: 270px; margin-top: 8px; display: flex; flex-direction: column;
+ #chat { flex: 1 1 0; min-width: 280px; height: 270px; margin-top: 8px; display: flex; flex-direction: column;
    background: rgba(255,255,255,.85); border-right: 3px solid #4682b4; font: 13px/1.4 monospace; color: #333; }
  #chat .chat-log { flex: 1 1 auto; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
  #chat .chat-log .hint { margin: auto; color: #999; font-style: italic; text-align: center; }

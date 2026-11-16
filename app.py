@@ -1884,7 +1884,7 @@ def _menu_head(shown, switches):
 def index():
     d = snapshot()
     me = os.environ.get("HOSTNAME", "")
-    items, system_items = [], []
+    items, system_items, system_switches = [], [], False
     m = d["metrics"]
     rels = d["releases"]
     gws = d["gateways"]
@@ -1944,7 +1944,9 @@ def index():
         is_system = _is_system(host, svc, group)
         switches = ""
         for key, gw in shown:
-            if is_system:
+            # System web pages have no switches; a system service that is not
+            # a page (DNS) keeps its own: turning it off cannot lock anyone out.
+            if is_system and not l4:
                 switches += '<div class="sw"></div>'
                 continue
             on = key in exposed
@@ -1982,6 +1984,7 @@ def index():
             f'<div class="stat"><b>&mdash;</b></div>'
             f'</div><div class="act">{warn}</div>{act}{restart}{images}{switches}</li>'
         )
+        system_switches = system_switches or (is_system and l4)
         if me_too:
             system_items.insert(0, row)
         else:
@@ -2011,7 +2014,7 @@ def index():
         menu="".join(items),
         menu_head=_menu_head(shown, True) if items else "",
         system=(
-            f'<h2>System</h2>\n<ul class="menu">{_menu_head(shown, False)}{"".join(system_items)}</ul>'
+            f'<h2>System</h2>\n<ul class="menu">{_menu_head(shown, system_switches)}{"".join(system_items)}</ul>'
             if system_items else ""
         ),
         nodes=nodes_html,
@@ -2902,7 +2905,7 @@ def app_expose(rns, rname):
         raise HTTPError(400, "need gw=private|public and on=0|1\n")
     l4 = request.forms.get("l4") == "1"
     route = next((r for r in snapshot()["l4" if l4 else "routes"] if (r[6], r[7]) == (rns, rname)), None)
-    if not route or _is_system(route[0], route[2], route[5]):
+    if not route or (not l4 and _is_system(route[0], route[2], route[5])):
         raise HTTPError(404, "no such app\n")
     try:
         (set_l4_exposure if l4 else set_exposure)(rns, rname, key, on == "1")

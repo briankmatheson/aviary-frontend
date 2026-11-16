@@ -87,9 +87,9 @@ BLURBS = {
     "jitsi": "Video conferencing",
 }
 
-# Platform services (aviary-deploy's system/ stack), listed under their own
-# heading below the apps. Keyed like BLURBS; anything not listed is an app.
-SYSTEM = {"gitea", "grafana", "harbor", "headlamp", "mattermost", "velero", "postgres-ui", "minio"}
+# Platform plumbing rather than things people open to do work, listed under
+# their own heading below the apps. Keyed like BLURBS; unlisted means app.
+SYSTEM = {"grafana", "headlamp", "velero", "postgres-ui", "minio"}
 
 try:
     config.load_incluster_config()

@@ -2,24 +2,16 @@
 kind: pipeline
 type: kubernetes
 name: aviary-frontend
-
 trigger:
   branch:
     - main
   event:
     - [ push, custom ]
-    
-clone:
-  skip_verify: true 
-
 clone:
   skip_verify: true
-
 steps:
 - name: kaniko
   image: harness/kaniko
   settings:
-    registry: registry.mesh.bmath.nyc
     repo: registry.mesh.bmath.nyc/aviary-frontend
     tags: latest
-    skip_tls_verify: true

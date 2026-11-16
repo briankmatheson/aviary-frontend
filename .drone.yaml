@@ -6,7 +6,8 @@ trigger:
   branch:
     - main
   event:
-    - [ push, custom ]
+    - push
+    - custom
 clone:
   skip_verify: true
 steps:

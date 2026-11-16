@@ -2060,16 +2060,32 @@ def _calls_in_text(text):
     return out
 
 
+_no_tools = set()   # models that turned out not to take tools at all
+
+
 def _chat_open(messages, tools=True):
-    """Start one streamed completion. Raises on transport/HTTP errors."""
+    """Start one streamed completion. Raises on transport/HTTP errors. A model
+    whose template has no place for tools refuses the request outright (400):
+    it is then asked again, and from then on, without them -- it can still
+    chat, it just cannot look anything up."""
     body = {"model": CHAT_MODEL, "stream": True, "messages": messages}
-    if tools:
+    if tools and CHAT_MODEL not in _no_tools:
         body["tools"] = CHAT_TOOLS
-    req = urllib.request.Request(
-        f"{CHAT_URL}/chat/completions", data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"},
-    )
-    return urllib.request.urlopen(req, timeout=300)
+
+    def go():
+        return urllib.request.urlopen(urllib.request.Request(
+            f"{CHAT_URL}/chat/completions", data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+        ), timeout=300)
+
+    try:
+        return go()
+    except urllib.error.HTTPError as e:
+        if e.code != 400 or "tools" not in body or b"tool" not in e.read(400).lower():
+            raise
+        _no_tools.add(CHAT_MODEL)
+        del body["tools"]
+        return go()
 
 
 # Where a tool call written out as text can begin (see _calls_in_text).
@@ -2098,7 +2114,7 @@ def _chat_relay(messages, upstream):
             except Exception as e:
                 yield f"\n(the model stopped answering: {e})\n".encode()
                 return
-        text, calls, sent, hold = "", {}, 0, None
+        text, calls, sent, hold, thought = "", {}, 0, None, False
         with upstream:
             for raw in upstream:
                 line = raw.decode("utf-8", "replace").strip()
@@ -2114,6 +2130,16 @@ def _chat_relay(messages, upstream):
                 piece = delta.get("content")
                 if piece:
                     text += piece
+                    # A reasoning model may think out loud first, in a
+                    # <think>...</think> block. That is not part of the reply:
+                    # nothing is shown while it is open, and it is cut out
+                    # once it closes.
+                    if sent == 0 and text.lstrip().startswith("<think>"):
+                        if "</think>" not in text:
+                            continue
+                        text, thought = text.split("</think>", 1)[1], True
+                    if thought and sent == 0:
+                        text = text.lstrip()  # the blank lines after the block
                     if hold is None:
                         at = [i for i in (text.find(m, max(0, sent - 1)) for m in _CALL_MARKS) if i >= 0]
                         if at:
@@ -2137,6 +2163,8 @@ def _chat_relay(messages, upstream):
                     a = fn.get("arguments")
                     c["args"] += a if isinstance(a, str) else (json.dumps(a) if a else "")
         upstream = None
+        if sent == 0 and text.lstrip().startswith("<think>"):
+            text = ""  # it never stopped thinking
         if hold is not None and not calls:
             calls = dict(enumerate(_calls_in_text(text[hold:].strip())))
             if calls:

@@ -3,7 +3,12 @@ kind: pipeline
 type: kubernetes
 name: aviary-frontend
 
-
+trigger:
+  branch:
+    - main
+  event:
+    - push
+    
 clone:
   skip_verify: true 
 

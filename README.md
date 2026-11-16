@@ -18,5 +18,11 @@ Deployed by [aviary-deploy](https://github.com/briankmatheson/aviary-deploy)
 with read access to httproutes, gateways, nodes, the ClusterIssuer and its CA
 secret.
 
+Each app row ends in two switches, **private** and **public**: they attach
+the app's `HTTPRoute` to, or detach it from, the internal Gateway (`aviary`)
+and the NATed one (`aviary-nat`, aviary-deploy's `nat_gateway_ip`). System
+entries have none. Override the names with `GATEWAY_NAMESPACE`,
+`PRIVATE_GATEWAY`, `PUBLIC_GATEWAY`.
+
 Env: `CLUSTER_ISSUER` (default `ca-issuer`), `BASE_DOMAIN` (shown in the
 header), `PORT` (8086).

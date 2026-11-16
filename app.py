@@ -10,6 +10,9 @@ Env:
                   /ca.crt serves its root: an ACME issuer's caBundle, or a
                   CA issuer's secret (default ca-issuer)
   PORT            listen port (default 8086)
+  GATEWAY_NAMESPACE, PRIVATE_GATEWAY, PUBLIC_GATEWAY
+                  the two Gateways the per-app exposure switches attach an
+                  app's HTTPRoute to (default envoy-gateway, aviary, aviary-nat)
 """
 import base64
 import gzip
@@ -95,6 +98,18 @@ BLURBS = {
 GROUP_LABEL = "aviary/group"
 SYSTEM = {"grafana", "headlamp", "velero", "postgres-ui", "minio"}
 
+# Exposure switches: each app (not the system entries) gets one switch per
+# Gateway. The private Gateway is the internal one, the public one is the
+# Gateway outside traffic is NATed to (aviary-deploy's nat_gateway_ip). A switch
+# adds or removes that Gateway from the app's HTTPRoute parentRefs; a Gateway
+# that does not exist gets no switch.
+GATEWAY_API = "gateway.networking.k8s.io"
+GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "envoy-gateway")
+EXPOSURES = (
+    ("private", os.environ.get("PRIVATE_GATEWAY", "aviary")),
+    ("public", os.environ.get("PUBLIC_GATEWAY", "aviary-nat")),
+)
+
 try:
     config.load_incluster_config()
 except config.ConfigException:
@@ -111,19 +126,41 @@ _ncache = {"at": 0.0, "data": None}
 _nlock = threading.Lock()
 
 
-def routes():
-    """[(host, namespace, service, port, gateway_ip, group)] for every
-    HTTPRoute; group is its aviary/group label ("" if unlabelled)."""
-    custom = client.CustomObjectsApi()
-    out = []
-    gws = {}
-    for gw in custom.list_cluster_custom_object(
-        "gateway.networking.k8s.io", "v1", "gateways"
+def gateways():
+    """{(namespace, name): {"ip": address, "listeners": {hostname: name}}} for
+    every Gateway; listeners are its HTTPS ones, keyed by the host they serve."""
+    out = {}
+    for gw in client.CustomObjectsApi().list_cluster_custom_object(
+        GATEWAY_API, "v1", "gateways"
     ).get("items", []):
         addrs = [a["value"] for a in gw.get("status", {}).get("addresses", [])]
-        gws[(gw["metadata"]["namespace"], gw["metadata"]["name"])] = addrs[0] if addrs else ""
+        out[(gw["metadata"]["namespace"], gw["metadata"]["name"])] = {
+            "ip": addrs[0] if addrs else "",
+            "listeners": {
+                l["hostname"]: l["name"]
+                for l in gw.get("spec", {}).get("listeners", [])
+                if l.get("hostname") and l.get("protocol") == "HTTPS"
+            },
+        }
+    return out
+
+
+def routes(gws):
+    """[(host, namespace, service, port, gateway_ip, group, route_namespace,
+    route_name, exposed, public_host)] for every HTTPRoute; group is its
+    aviary/group label ("" if unlabelled) and exposed the EXPOSURES keys
+    ("private", "public") whose Gateway it is attached to. gateway_ip is the
+    private Gateway's when the route is on it, else that of whichever Gateway it
+    is on ("" for none).
+
+    A route may carry a second hostname for the public Gateway (aviary-deploy's
+    public_domain). It is still one app and one row: host is the name the
+    private Gateway listens for (else the route's first), public_host the one
+    the public Gateway listens for ("" if it has none of its own)."""
+    custom = client.CustomObjectsApi()
+    out = []
     for r in custom.list_cluster_custom_object(
-        "gateway.networking.k8s.io", "v1", "httproutes"
+        GATEWAY_API, "v1", "httproutes"
     ).get("items", []):
         spec = r.get("spec", {})
         hosts = spec.get("hostnames", [])
@@ -131,14 +168,19 @@ def routes():
             continue
         ns = r["metadata"]["namespace"]
         group = (r["metadata"].get("labels") or {}).get(GROUP_LABEL, "")
-        ip = ""
-        for p in spec.get("parentRefs", []):
-            ip = gws.get((p.get("namespace", ns), p.get("name")), "") or ip
+        parents = {(p.get("namespace", ns), p.get("name")) for p in spec.get("parentRefs") or []}
+        exposed = tuple(k for k, gw in EXPOSURES if (GATEWAY_NAMESPACE, gw) in parents)
+        first = [(GATEWAY_NAMESPACE, gw) for k, gw in EXPOSURES if k in exposed] + sorted(parents)
+        ip = next((gws[p]["ip"] for p in first if gws.get(p, {}).get("ip")), "")
+        served = {k: [h for h in hosts if h in gws.get((GATEWAY_NAMESPACE, gw), {}).get("listeners", {})]
+                  for k, gw in EXPOSURES}
+        host = (served["private"] or hosts)[0]
+        pub = next((h for h in served["public"] if h != host), "")
         for rule in spec.get("rules", []):
             # The https-redirect route has filters and no backends; skip it.
             for b in rule.get("backendRefs", []):
-                for h in hosts:
-                    out.append((h, b.get("namespace", ns), b.get("name", ""), b.get("port", ""), ip, group))
+                out.append((host, b.get("namespace", ns), b.get("name", ""), b.get("port", ""), ip, group,
+                            ns, r["metadata"]["name"], exposed, pub))
     # one line per host
     seen, uniq = set(), []
     for row in sorted(out):
@@ -146,6 +188,42 @@ def routes():
             seen.add(row[0])
             uniq.append(row)
     return uniq
+
+
+def _is_system(host, svc, group):
+    """Whether a route is listed under System (this page always is)."""
+    if svc == "aviary-frontend":
+        return True
+    return group == "system" if group else host.split(".", 1)[0] in SYSTEM
+
+
+def set_exposure(rns, rname, key, on):
+    """Attach an HTTPRoute to (or detach it from) the private or public Gateway,
+    on the listener that Gateway has for the route's hostname. The route's other
+    parents are left alone."""
+    gw_name = dict(EXPOSURES)[key]
+    custom = client.CustomObjectsApi()
+    r = custom.get_namespaced_custom_object(GATEWAY_API, "v1", rns, "httproutes", rname)
+    refs = r["spec"].get("parentRefs") or []
+    kept = [p for p in refs
+            if not (p.get("name") == gw_name and p.get("namespace", rns) == GATEWAY_NAMESPACE)]
+    if on:
+        if len(kept) != len(refs):
+            return  # already attached
+        gw = gateways().get((GATEWAY_NAMESPACE, gw_name))
+        if not gw:
+            raise HTTPError(404, f"no {key} gateway ({GATEWAY_NAMESPACE}/{gw_name})\n")
+        sections = [gw["listeners"][h] for h in r["spec"].get("hostnames") or [] if h in gw["listeners"]]
+        if not sections:
+            raise HTTPError(400, f"the {key} gateway has no HTTPS listener for {rname}'s hostname\n")
+        kept += [{"group": GATEWAY_API, "kind": "Gateway", "name": gw_name,
+                  "namespace": GATEWAY_NAMESPACE, "sectionName": s} for s in sections]
+    elif len(kept) == len(refs):
+        return  # already detached
+    # Replace rather than patch: the object carries the resourceVersion just
+    # read, so a concurrent edit of the route is a 409 instead of being lost.
+    r["spec"]["parentRefs"] = kept
+    custom.replace_namespaced_custom_object(GATEWAY_API, "v1", rns, "httproutes", rname, r)
 
 
 def nodes():
@@ -505,7 +583,7 @@ def app_resources(ns):
 def app_namespaces():
     """Namespaces the menu lists (this page's own included): the only ones the
     controls may change."""
-    return {ns for _, ns, _, _, _, _ in snapshot()["routes"]}
+    return {r[1] for r in snapshot()["routes"]}
 
 
 def restart_workloads(ns):
@@ -829,8 +907,10 @@ def ca_pem():
 def snapshot():
     with _lock:
         if time.time() - _cache["at"] > 15:
+            gws = gateways()
             _cache["data"] = {
-                "routes": routes(),
+                "gateways": gws,
+                "routes": routes(gws),
                 "nodes": nodes(),
                 "metrics": metrics(),
                 "releases": releases(),
@@ -905,6 +985,22 @@ RL_CSS = """
    background: #fff; font-size: 14px; }
  #rl .rl-foot button.go { background: #1a4d8f; border-color: #1a4d8f; color: #fff; }
  #rl .rl-err { color: #b00020; font-size: 13px; min-height: 18px; margin-top: 8px; }
+"""
+
+# Exposure switches at the right-hand end of each app row. System rows carry
+# empty .sw spacers so the columns to their left still line up with the apps'.
+SW_CSS = """
+ ul.menu li .sw { flex: 0 0 auto; margin: 0; width: 44px; text-align: center; }
+ ul.menu li .sw + .sw { margin-left: -8px; }
+ ul.menu li .sw button { display: block; position: relative; width: 36px; height: 20px; margin: 0 auto 3px;
+   padding: 0; border: 0; border-radius: 10px; background: #c9ced6; cursor: pointer; transition: background .15s; }
+ ul.menu li .sw button::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+   border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: left .15s; }
+ ul.menu li .sw button[aria-checked=true] { background: #1a4d8f; }
+ ul.menu li .sw.public button[aria-checked=true] { background: #c2570c; }
+ ul.menu li .sw button[aria-checked=true]::after { left: 18px; }
+ ul.menu li .sw button:focus-visible { outline: 2px solid #1a4d8f; outline-offset: 2px; }
+ ul.menu li .sw span { display: block; font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: .5px; }
 """
 
 RL_HTML = """
@@ -1383,7 +1479,9 @@ def index():
     items, system_items = [], []
     m = d["metrics"]
     rels = d["releases"]
-    for host, ns, svc, port, ip, group in d["routes"]:
+    gws = d["gateways"]
+    shown = [(k, gw) for k, gw in EXPOSURES if (GATEWAY_NAMESPACE, gw) in gws]
+    for host, ns, svc, port, ip, group, rns, rname, exposed, pub in d["routes"]:
         me_too = svc == "aviary-frontend"  # that's us: listed first under System
         label = host.split(".", 1)[0]
         blurb = "This page" if me_too else BLURBS.get(label, f"{ns}/{svc}:{port}")
@@ -1434,7 +1532,31 @@ def index():
             f'<div class="act images"><button type="button" class="imgs" data-ns="{html.escape(ns)}" '
             f'data-app="{html.escape(label)}" title="workloads and images">&#9776;</button></div>'
         )
-        is_system = me_too or (group == "system" if group else label in SYSTEM)
+        is_system = _is_system(host, svc, group)
+        switches = ""
+        for key, gw in shown:
+            if is_system:
+                switches += '<div class="sw"></div>'
+                continue
+            on = key in exposed
+            where = f"the {key} gateway ({gws[(GATEWAY_NAMESPACE, gw)]['ip'] or gw})"
+            if key == "public" and pub:
+                where += f" as {pub}"
+            ask = (
+                f' onsubmit="return confirm(\'Expose {html.escape(label)} on the public gateway?\')"'
+                if key == "public" and not on else ""
+            )
+            switches += (
+                f'<form class="sw {key}" method="post" '
+                f'action="/app/{html.escape(rns)}/{html.escape(rname)}/expose"{ask}>'
+                f'<input type="hidden" name="gw" value="{key}">'
+                f'<input type="hidden" name="on" value="{0 if on else 1}">'
+                f'<button role="switch" aria-checked="{"true" if on else "false"}" '
+                f'aria-label="{html.escape(label)} on {key} gateway" '
+                f'title="{"served on" if on else "not on"} {html.escape(where)} &#10;'
+                f'click to {"remove it" if on else "expose it"}"></button>'
+                f"<span>{key}</span></form>"
+            )
         row = (
             f'<li class="{"off" if off else ""}"><div class="app">'
             f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>'
@@ -1445,7 +1567,7 @@ def index():
             f'<div class="stat"><b>{disk}</b><span>Disk Cap</span></div>'
             f'<div class="stat"><b>&mdash;</b><span>Disk Tput</span></div>'
             f'<div class="stat"><b>&mdash;</b><span>Disk IOPS</span></div>'
-            f'</div><div class="act">{warn}</div>{act}{restart}{images}</li>'
+            f'</div><div class="act">{warn}</div>{act}{restart}{images}{switches}</li>'
         )
         if me_too:
             system_items.insert(0, row)
@@ -1453,8 +1575,9 @@ def index():
             (system_items if is_system else items).append(row)
     nodes_html = _node_rows_html(d["nodes"])
     by_ip = {}
-    for host, _, _, _, ip, _ in d["routes"]:
-        by_ip.setdefault(ip or "<gateway-ip>", []).append(host)
+    for r in d["routes"]:
+        if r[8] or r[4]:  # on no Gateway at all: nothing to resolve it to
+            by_ip.setdefault(r[4] or "<gateway-ip>", []).append(r[0])
     hosts = "\n".join(f"{ip:<16} {' '.join(hs)}" for ip, hs in sorted(by_ip.items()))
     fort = _fortune()
     fort_html = f'<pre class="fortune">{html.escape(fort)}</pre>' if fort else ""
@@ -1480,7 +1603,7 @@ def index():
         nodes=nodes_html,
         hosts=html.escape(hosts),
         me=html.escape(me),
-        rl_css=RL_CSS + IMG_CSS,
+        rl_css=RL_CSS + IMG_CSS + SW_CSS,
         rl_html=RL_HTML + IMG_HTML,
         splash_css=SPLASH_CSS,
         splash_html=SPLASH_HTML,
@@ -1596,6 +1719,25 @@ def app_restart(ns):
     if ns not in app_namespaces():
         raise HTTPError(404, "no such app\n")
     restart_workloads(ns)
+    _bump()
+    redirect("/")
+
+
+@app.route("/app/<rns>/<rname>/expose", method="POST")
+def app_expose(rns, rname):
+    """An exposure switch: put an app's HTTPRoute on, or take it off, the
+    private or public Gateway. Apps only -- a system entry (this page included)
+    has no switch, so nobody can cut off the page they are switching from."""
+    key, on = request.forms.get("gw", ""), request.forms.get("on", "")
+    if key not in dict(EXPOSURES) or on not in ("0", "1"):
+        raise HTTPError(400, "need gw=private|public and on=0|1\n")
+    route = next((r for r in snapshot()["routes"] if (r[6], r[7]) == (rns, rname)), None)
+    if not route or _is_system(route[0], route[2], route[5]):
+        raise HTTPError(404, "no such app\n")
+    try:
+        set_exposure(rns, rname, key, on == "1")
+    except client.exceptions.ApiException as e:
+        raise HTTPError(409 if e.status in (409, 422) else 502, f"HTTPRoute {rname}: {e.reason}\n")
     _bump()
     redirect("/")
 

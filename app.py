@@ -115,8 +115,8 @@ EXPOSURES = (
     ("public", os.environ.get("PUBLIC_GATEWAY", "aviary-nat")),
 )
 
-# Chat window: a panel at the top of the page, beside the title and fortune
-# and under the account corner, that talks to a model served inside
+# Chat window: a panel under the title line, level with the fortune box and
+# to its right, that talks to a model served inside
 # the cluster (Ollama on the GPU node) through its OpenAI-compatible API. The
 # browser only ever talks to this app (/api/chat, behind the same login as the
 # rest of the page); this app relays to the model. Inert unless CHAT_URL is set.
@@ -1453,10 +1453,8 @@ PAGE = """<!doctype html>
 <nav><a href="/{ca_name}" download="{ca_name}" title="Cluster CA: trust this to stop the browser warnings">{ca_name}</a></nav>
 <div class="corner"><div class="host">{host}</div>{auth_nav}</div>
 </div>
-<div class="top"><div class="top-l">
 <h1>Aviary</h1>
-{fortune}
-</div>{chat}</div>
+<div class="top"><div class="top-l">{fortune}</div>{chat}</div>
 <h2>Apps</h2>
 <ul class="menu">{menu}</ul>
 {system}

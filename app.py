@@ -102,6 +102,8 @@ BLURBS = {
     "headlamp": "Kubernetes UI",
     "postgres-ui": "Postgres operator UI",
     "rustpad": "Shared text editor",
+    "mail": "Mail (Axigen WebMail)",
+    "mattermost": "Team chat",
     "bash": "In-cluster shell",
     "velero": "Backup and restore",
     "jupyterhub": "Interactive notebooks",

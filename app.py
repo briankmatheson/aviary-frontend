@@ -10,6 +10,10 @@ Env:
                   /ca.crt serves its root: an ACME issuer's caBundle, or a
                   CA issuer's secret (default ca-issuer)
   PORT            listen port (default 8086)
+  CHAT_URL        OpenAI-compatible API base for the chat window, e.g. the
+                  cluster's Ollama: http://ollama.aviary-ollama.svc:11434/v1
+                  (unset: no chat window)
+  CHAT_MODEL      model the chat window talks to (default llama3)
   GATEWAY_NAMESPACE, PRIVATE_GATEWAY, PUBLIC_GATEWAY
                   the two Gateways the per-app exposure switches attach an
                   app's HTTPRoute to (default envoy-gateway, aviary, aviary-nat)
@@ -29,6 +33,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -109,6 +114,16 @@ EXPOSURES = (
     ("private", os.environ.get("PRIVATE_GATEWAY", "aviary")),
     ("public", os.environ.get("PUBLIC_GATEWAY", "aviary-nat")),
 )
+
+# Chat window: a small panel on the page that talks to a model served inside
+# the cluster (Ollama on the GPU node) through its OpenAI-compatible API. The
+# browser only ever talks to this app (/api/chat, behind the same login as the
+# rest of the page); this app relays to the model. Inert unless CHAT_URL is set.
+CHAT_URL = os.environ.get("CHAT_URL", "").rstrip("/")
+CHAT_MODEL = os.environ.get("CHAT_MODEL", "llama3")
+CHAT_ENABLED = bool(CHAT_URL)
+CHAT_MAX_MESSAGES = 30     # of the conversation, newest kept
+CHAT_MAX_CHARS = 8000      # per message
 
 try:
     config.load_incluster_config()
@@ -1003,6 +1018,127 @@ SW_CSS = """
  ul.menu li .sw span { display: block; font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: .5px; }
 """
 
+CHAT_CSS = """
+ #chat-toggle { position: fixed; right: 22px; bottom: 22px; z-index: 900; width: 52px; height: 52px; border: 0;
+   border-radius: 50%; background: #1a4d8f; color: #fff; font-size: 24px; line-height: 1; cursor: pointer;
+   box-shadow: 0 4px 14px rgba(0,0,0,.3); }
+ #chat-toggle:hover { background: #163f75; }
+ #chat { position: fixed; right: 22px; bottom: 86px; z-index: 900; width: min(400px, calc(100vw - 28px));
+   height: min(560px, calc(100vh - 110px)); display: flex; flex-direction: column; background: #fff;
+   border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.3); overflow: hidden; font: 14px/1.45 system-ui, sans-serif; }
+ #chat[hidden] { display: none; }
+ #chat .chat-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #1a4d8f; color: #fff; }
+ #chat .chat-head b { flex: 1 1 auto; font-size: 15px; }
+ #chat .chat-head small { font-weight: 400; opacity: .75; margin-left: 6px; }
+ #chat .chat-head button { border: 0; background: none; color: #fff; cursor: pointer; font-size: 13px; opacity: .8; padding: 2px 6px; }
+ #chat .chat-head button:hover { opacity: 1; }
+ #chat .chat-log { flex: 1 1 auto; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px;
+   background: #f5f6f8; }
+ #chat .chat-log .hint { margin: auto; color: #999; font-size: 13px; text-align: center; }
+ #chat .msg { max-width: 88%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+ #chat .msg.user { align-self: flex-end; background: #1a4d8f; color: #fff; border-bottom-right-radius: 4px; }
+ #chat .msg.assistant { align-self: flex-start; background: #fff; color: #222; border-bottom-left-radius: 4px;
+   box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+ #chat .msg.pending:empty::after { content: "\\2026"; color: #999; }
+ #chat .msg.err { background: #ffecec; color: #b00020; }
+ #chat form { display: flex; gap: 8px; padding: 10px; margin: 0; border-top: 1px solid #e3e6eb; background: #fff; }
+ #chat textarea { flex: 1 1 auto; resize: none; height: 40px; max-height: 120px; padding: 9px 10px; border: 1px solid #d8dde5;
+   border-radius: 8px; font: inherit; }
+ #chat textarea:focus { outline: 2px solid #9db8dc; border-color: #9db8dc; }
+ #chat form button { flex: 0 0 auto; padding: 0 14px; border: 0; border-radius: 8px; background: #1a4d8f; color: #fff;
+   font: inherit; cursor: pointer; }
+ #chat form button.stop { background: #b00020; }
+"""
+
+CHAT_HTML = """
+<button id="chat-toggle" type="button" title="Chat with __MODEL__" aria-controls="chat" aria-expanded="false">&#128172;</button>
+<section id="chat" hidden aria-label="Chat">
+ <div class="chat-head"><b>Chat<small>__MODEL__</small></b>
+  <button type="button" class="clear" title="forget this conversation">clear</button>
+  <button type="button" class="close" title="close" aria-label="close">&#10005;</button></div>
+ <div class="chat-log" aria-live="polite"></div>
+ <form><textarea placeholder="Ask something&hellip;" aria-label="Message"></textarea><button>Send</button></form>
+</section>
+<script>
+// Chat window. The conversation lives in this tab (sessionStorage) and is sent
+// whole with each turn to /api/chat, which streams the reply back as plain text.
+(function () {
+  var box = document.getElementById('chat'), toggle = document.getElementById('chat-toggle');
+  if (!box || !window.fetch) return;
+  var log = box.querySelector('.chat-log'), form = box.querySelector('form');
+  var ta = form.querySelector('textarea'), go = form.querySelector('button');
+  var msgs = [], busy = null;
+  function store(k, v) { try { sessionStorage.setItem(k, v); } catch (e) {} }
+  function load(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
+  try { msgs = JSON.parse(load('chat') || '[]'); } catch (e) { msgs = []; }
+  function bottom() { log.scrollTop = log.scrollHeight; }
+  function bubble(role, text) {
+    var hint = log.querySelector('.hint'); if (hint) hint.remove();
+    var d = document.createElement('div');
+    d.className = 'msg ' + role; d.textContent = text; log.appendChild(d); bottom();
+    return d;
+  }
+  function redraw() {
+    log.textContent = '';
+    if (!msgs.length) {
+      var h = document.createElement('div'); h.className = 'hint';
+      h.textContent = 'Running on the GPU in this cluster.'; log.appendChild(h);
+    }
+    msgs.forEach(function (m) { bubble(m.role, m.content); });
+  }
+  function show(on) {
+    box.hidden = !on; toggle.setAttribute('aria-expanded', on ? 'true' : 'false');
+    store('chat-open', on ? '1' : '');
+    if (on) { bottom(); ta.focus(); }
+  }
+  function done() { busy = null; go.textContent = 'Send'; go.classList.remove('stop'); store('chat', JSON.stringify(msgs)); }
+  function send() {
+    var text = ta.value.trim();
+    if (!text) return;
+    ta.value = '';
+    msgs.push({ role: 'user', content: text });
+    bubble('user', text);
+    var out = bubble('assistant', ''), acc = '';
+    out.classList.add('pending');
+    busy = new AbortController(); go.textContent = 'Stop'; go.classList.add('stop');
+    fetch('/api/chat', { method: 'POST', credentials: 'same-origin', signal: busy.signal,
+                         headers: { 'Content-Type': 'application/json' },
+                         body: JSON.stringify({ messages: msgs }) })
+      .then(function (r) {
+        if (!r.ok) return r.text().then(function (t) { throw new Error(t.trim() || ('HTTP ' + r.status)); });
+        var rd = r.body.getReader(), dec = new TextDecoder();
+        return (function pump() {
+          return rd.read().then(function (x) {
+            if (x.done) return;
+            acc += dec.decode(x.value, { stream: true }); out.textContent = acc; bottom();
+            return pump();
+          });
+        })();
+      })
+      .catch(function (e) {
+        // Stopped or failed. Keep what arrived; with nothing to keep, show why.
+        if (!acc) { out.classList.add('err'); out.textContent = e.name === 'AbortError' ? 'Stopped.' : 'No reply: ' + e.message; }
+      })
+      .then(function () {
+        out.classList.remove('pending');
+        // A turn with no reply is dropped, so the next one still alternates.
+        if (acc) msgs.push({ role: 'assistant', content: acc }); else msgs.pop();
+        done();
+      });
+  }
+  form.onsubmit = function (e) { e.preventDefault(); if (busy) busy.abort(); else send(); };
+  ta.onkeydown = function (e) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!busy) send(); }
+  };
+  toggle.onclick = function () { show(box.hidden); };
+  box.querySelector('.close').onclick = function () { show(false); };
+  box.querySelector('.clear').onclick = function () { if (busy) busy.abort(); msgs = []; store('chat', '[]'); redraw(); };
+  redraw();
+  if (load('chat-open')) show(true);
+})();
+</script>
+"""
+
 RL_HTML = """
 <dialog id="rl"><form method="post">
  <h3>Requests &amp; limits: <span id="rl-app"></span></h3>
@@ -1603,8 +1739,10 @@ def index():
         nodes=nodes_html,
         hosts=html.escape(hosts),
         me=html.escape(me),
-        rl_css=RL_CSS + IMG_CSS + SW_CSS,
-        rl_html=RL_HTML + IMG_HTML,
+        rl_css=RL_CSS + IMG_CSS + SW_CSS + (CHAT_CSS if CHAT_ENABLED else ""),
+        rl_html=RL_HTML + IMG_HTML + (
+            CHAT_HTML.replace("__MODEL__", html.escape(CHAT_MODEL)) if CHAT_ENABLED else ""
+        ),
         splash_css=SPLASH_CSS,
         splash_html=SPLASH_HTML,
     )
@@ -1616,6 +1754,88 @@ def api_nodes():
     the app (not a public path), so the browser's session cookie carries in."""
     response.content_type = "text/html; charset=utf-8"
     return _node_rows_html(nodes_snapshot())
+
+
+def _chat_system():
+    """The system prompt: who the model is here, and what this cluster serves
+    (from the same snapshot the menu is drawn from), so it can point at things."""
+    lines = []
+    try:
+        for r in snapshot()["routes"]:
+            label = r[0].split(".", 1)[0]
+            lines.append(f"- {label}: {BLURBS.get(label, 'app')} (https://{r[0]}/)")
+    except Exception:
+        pass  # no cluster view: it can still chat
+    where = f" for the cluster at {BASE_DOMAIN}" if BASE_DOMAIN else ""
+    apps = ("\nWhat the cluster serves:\n" + "\n".join(lines)) if lines else ""
+    return (
+        f"You are the assistant in the chat window of Aviary, the landing page{where}. "
+        "You run on the cluster's own GPU. Be brief and direct. You cannot see live "
+        "metrics or change anything; say so rather than guess." + apps
+    )
+
+
+def _chat_error(status, message):
+    """A plain-text error for the chat window (not bottle's HTML error page)."""
+    response.status = status
+    response.content_type = "text/plain; charset=utf-8"
+    return message
+
+
+@app.route("/api/chat", method="POST")
+def api_chat():
+    """One turn of the chat window: relay the conversation to the model's
+    OpenAI-compatible API and stream the reply back as plain text (the SSE
+    framing is undone here, so the page just appends what it reads). Errors
+    are plain text too: the window shows them in place of the reply."""
+    if not CHAT_ENABLED:
+        return _chat_error(404, "chat is not configured\n")
+    try:
+        msgs = (request.json or {}).get("messages")
+    except Exception:
+        msgs = None
+    if not isinstance(msgs, list) or not msgs:
+        return _chat_error(400, "need {\"messages\": [{role, content}, ...]}\n")
+    clean = []
+    for m in msgs[-CHAT_MAX_MESSAGES:]:
+        if (not isinstance(m, dict) or m.get("role") not in ("user", "assistant")
+                or not isinstance(m.get("content"), str)):
+            return _chat_error(400, "messages need a role of user or assistant and text content\n")
+        clean.append({"role": m["role"], "content": m["content"][:CHAT_MAX_CHARS]})
+    body = json.dumps({
+        "model": CHAT_MODEL, "stream": True,
+        "messages": [{"role": "system", "content": _chat_system()}] + clean,
+    }).encode()
+    req = urllib.request.Request(
+        f"{CHAT_URL}/chat/completions", data=body, headers={"Content-Type": "application/json"}
+    )
+    try:
+        upstream = urllib.request.urlopen(req, timeout=300)
+    except urllib.error.HTTPError as e:
+        return _chat_error(502, f"the model refused the request ({e.code}): {e.read(300).decode('utf-8', 'replace')}\n")
+    except Exception as e:
+        return _chat_error(502, f"the model is not reachable: {e}\n")
+    response.content_type = "text/plain; charset=utf-8"
+    response.set_header("Cache-Control", "no-store")
+    response.set_header("X-Accel-Buffering", "no")
+
+    def relay():
+        with upstream:
+            for raw in upstream:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    piece = json.loads(data)["choices"][0]["delta"].get("content")
+                except (ValueError, KeyError, IndexError, AttributeError):
+                    continue
+                if piece:
+                    yield piece.encode()
+
+    return relay()
 
 
 @app.route("/api/app/<ns>/resources")

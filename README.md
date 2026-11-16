@@ -24,5 +24,10 @@ and the NATed one (`aviary-nat`, aviary-deploy's `nat_gateway_ip`). System
 entries have none. Override the names with `GATEWAY_NAMESPACE`,
 `PRIVATE_GATEWAY`, `PUBLIC_GATEWAY`.
 
+With `CHAT_URL` set to an OpenAI-compatible API (the cluster's Ollama:
+`http://ollama.aviary-ollama.svc:11434/v1`) the page gets a chat window in the
+bottom-right corner, talking to `CHAT_MODEL` (default `llama3`). The browser
+only talks to this app; `/api/chat` relays to the model and streams the reply.
+
 Env: `CLUSTER_ISSUER` (default `ca-issuer`), `BASE_DOMAIN` (shown in the
 header), `PORT` (8086).

@@ -617,15 +617,38 @@ def node_root_fs():
     return {n: (size[n] - avail[n], size[n]) for n in size if n and n in avail}
 
 
-_pcache = {"at": 0.0, "data": (None, None)}
+_pcache = {"at": 0.0, "data": (None, None, None)}
 _plock = threading.Lock()
+
+# abe-csi runs a short fio (4k writes, iodepth 1) against each volume it
+# provisions and records the result on the PV.
+FIO_IOPS_ANNOTATION = "abe.csi/write-iops"
+
+
+def pv_fio_iops():
+    """The best fio write IOPS any PV measured, or None if none carries one."""
+    best = None
+    try:
+        for pv in client.CoreV1Api().list_persistent_volume().items:
+            try:
+                v = float((pv.metadata.annotations or {}).get(FIO_IOPS_ANNOTATION, ""))
+            except ValueError:
+                continue
+            if math.isfinite(v) and v > 0 and (best is None or v > best):
+                best = v
+    except Exception:
+        pass
+    return best
 
 
 def node_disk_peak(io):
     """(bytes_per_s, iops): the top of the disk scales. Disks advertise no
     throughput capacity, so the ceiling is the busiest any node has actually
     been over the last 24h (and never less than what is on screen right now).
-    The 24h subquery is cached for a minute; the peak moves slowly."""
+    The IOPS scale starts from what the storage has been measured to do -- the
+    best fio result on any PV -- so a quiet day does not paint a trickle red;
+    a node that beats it still raises the ceiling.
+    The 24h subquery and the PV list are cached for a minute; both move slowly."""
     if not PROMETHEUS_URL:
         return None, None
     with _plock:
@@ -640,14 +663,14 @@ def node_disk_peak(io):
                 f"max_over_time((sum by (nodename) ((rate(node_disk_reads_completed_total{{{dev}}}[5m])"
                 f"+rate(node_disk_writes_completed_total{{{dev}}}[5m])){join}))[24h:5m])"
             )
-            _pcache["data"] = (max(tput.values(), default=None), max(iops.values(), default=None))
+            _pcache["data"] = (max(tput.values(), default=None), max(iops.values(), default=None), pv_fio_iops())
             _pcache["at"] = time.time()
-        peak_bps, peak_iops = _pcache["data"]
+        peak_bps, peak_iops, fio_iops = _pcache["data"]
     now_bps = [b for b, _ in io.values() if b is not None]
     now_iops = [i for _, i in io.values() if i is not None]
     return (
         max([peak_bps or 0, *now_bps]) or None,
-        max([peak_iops or 0, *now_iops]) or None,
+        max([fio_iops or 0, peak_iops or 0, *now_iops]) or None,
     )
 
 

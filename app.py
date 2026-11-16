@@ -13,9 +13,14 @@ Env:
   CHAT_URL        OpenAI-compatible API base for the chat window, e.g. the
                   cluster's Ollama: http://ollama.aviary-ollama.svc:11434/v1
                   (unset: no chat window)
-  CHAT_MODEL      model the chat window talks to (default llama3)
-  CHAT_NICK       the model's name in the room (default: the model name's
-                  leading letters, e.g. llama)
+  CHAT_MODEL      model the chat room starts out with (default llama3); the
+                  room's model menu can switch to any model Ollama has, or
+                  install another, and that choice is remembered
+  CHAT_NICK       CHAT_MODEL's name in the room (default, and for every other
+                  model: the model name's leading letters, e.g. llama)
+  CHAT_STATE_CONFIGMAP
+                  ConfigMap in this namespace that remembers the model chosen
+                  from the menu (default aviary-chat; empty: not remembered)
   CHAT_HTTP_NETS  networks the model's http_get tool may connect to, comma
                   separated CIDRs (default 10.23.0.0/16: the cluster's own
                   network, not the internet)
@@ -135,7 +140,10 @@ EXPOSURES = (
 CHAT_URL = os.environ.get("CHAT_URL", "").rstrip("/")
 CHAT_MODEL = os.environ.get("CHAT_MODEL", "llama3")
 CHAT_ENABLED = bool(CHAT_URL)
-CHAT_NICK = os.environ.get("CHAT_NICK", "") or (re.match(r"[A-Za-z]+", CHAT_MODEL) or ["bot"])[0].lower()
+CHAT_NICK = os.environ.get("CHAT_NICK", "")
+CHAT_STATE_CONFIGMAP = os.environ.get("CHAT_STATE_CONFIGMAP", "aviary-chat")
+# Ollama's own API (model list, pulls) lives beside its OpenAI-compatible one.
+OLLAMA_URL = re.sub(r"/v1$", "", CHAT_URL)
 CHAT_MAX_MESSAGES = 30     # of the room handed to the model, newest kept
 CHAT_MAX_CHARS = 4000      # per line said in the room
 CHAT_ROOM_KEEP = 300       # lines the room remembers (in memory: a restart empties it)
@@ -1124,7 +1132,31 @@ CHAT_CSS = """
  #chat input { flex: 1 1 auto; min-width: 0; padding: 0; border: 0; outline: 0; background: none;
    font: inherit; color: #222; }
  #chat input::placeholder { color: #999; font-style: italic; }
+ #chat .msg.sys, #chat .msg.sys .nick { color: #999; font-style: italic; }
+ #chat form button.model { flex: 0 0 auto; margin-left: 10px; padding: 0; border: 0; background: none; cursor: pointer;
+   font: inherit; font-style: italic; color: #4682b4; }
+ #chat form button.model:hover { color: #1a4d8f; }
  #chat.off { opacity: .55; filter: grayscale(1); }
+ dialog#md { border: 0; border-radius: 10px; padding: 22px 26px; width: min(620px, 94vw); max-height: 86vh;
+   box-shadow: 0 12px 40px rgba(0,0,0,.3); font: 15px/1.4 system-ui, sans-serif; color: #222; }
+ dialog#md::backdrop { background: rgba(20,30,45,.45); }
+ #md h3 { margin: 0 0 4px; font-size: 20px; }
+ #md p.note { margin: 0 0 14px; font-size: 13px; color: #666; }
+ #md .md-list { display: flex; flex-direction: column; gap: 8px; }
+ #md .md-m { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: #f5f6f8; border-radius: 8px; }
+ #md .md-m.cur { background: #e8f0fb; }
+ #md .md-m code { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font: 13px/1.4 ui-monospace, monospace; }
+ #md .md-m small { flex: 0 0 auto; color: #777; font-size: 12px; white-space: nowrap; }
+ #md button, #md input[type=text] { font-size: 13px; padding: 5px 10px; border-radius: 6px; border: 1px solid #d8dde5;
+   background: #fff; }
+ #md button { cursor: pointer; }
+ #md button.go { background: #1a4d8f; border-color: #1a4d8f; color: #fff; }
+ #md button:disabled { background: #c9ced6; border-color: #c9ced6; color: #fff; cursor: default; }
+ #md form { display: flex; gap: 8px; margin: 16px 0 0; }
+ #md form input { flex: 1 1 auto; min-width: 0; }
+ #md .md-pull { min-height: 20px; margin-top: 8px; font-size: 13px; color: #555; }
+ #md .md-pull.err { color: #b00020; }
+ #md .md-foot { text-align: right; margin-top: 14px; }
  #chat.off input { cursor: not-allowed; }
 """
 
@@ -1132,8 +1164,17 @@ CHAT_HTML = """
 <section id="chat" class="__CLASS__" aria-label="Chat room" data-hint="__HINT__">
  <div class="chat-log" aria-live="polite"></div>
  <hr>
- <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off" maxlength="4000"__DISABLED__></form>
+ <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off" maxlength="4000"__DISABLED__><button type="button" class="model" title="choose or install a model">__NICK__ &#9662;</button></form>
 </section>
+<dialog id="md">
+ <h3>Model</h3>
+ <p class="note">Which model the room talks to. Switching it switches it for everyone here.
+ The first reply from a newly chosen model waits while it loads onto the GPU.</p>
+ <div class="md-list"></div>
+ <form><input type="text" placeholder="install: llama3.3:70b  or  hf.co/user/repo:Q4_K_M" aria-label="Model to install" autocomplete="off"><button class="go">Install</button></form>
+ <div class="md-pull"></div>
+ <div class="md-foot"><button type="button" class="cancel">Close</button></div>
+</dialog>
 <script>
 // Chat room, IRC style. The transcript lives on the server and is the same for
 // everyone on the page: this polls /api/chat for lines that are new or have
@@ -1145,6 +1186,7 @@ CHAT_HTML = """
   if (!box || !window.fetch) return;
   var log = box.querySelector('.chat-log'), form = box.querySelector('form'), inp = form.querySelector('input');
   var rev = 0, epoch = '', rows = {}, busy = false, timer = null;
+  var pick = form.querySelector('button.model'), nick = pick.textContent.replace(/ *\u25be$/, '');
   function hint() {
     if (log.children.length) return;
     var h = document.createElement('div'); h.className = 'hint'; h.textContent = box.dataset.hint; log.appendChild(h);
@@ -1157,8 +1199,10 @@ CHAT_HTML = """
   function upsert(m) {
     var row = rows[m.id];
     if (!row) {
-      row = rows[m.id] = line(m.bot ? 'bot' : 'user');
-      var n = document.createElement('span'); n.className = 'nick'; n.textContent = '<' + m.nick + '> ';
+      // A notice (nick "*") reads as an IRC action line: "* bmath switched ...".
+      row = rows[m.id] = line(m.nick === '*' ? 'sys' : m.bot ? 'bot' : 'user');
+      var n = document.createElement('span'); n.className = 'nick';
+      n.textContent = m.nick === '*' ? '* ' : '<' + m.nick + '> ';
       var b = document.createElement('span'); b.className = 'body';
       row.appendChild(n); row.appendChild(b);
     }
@@ -1176,6 +1220,10 @@ CHAT_HTML = """
         if (d.epoch !== epoch) { epoch = d.epoch; rows = {}; log.textContent = ''; stuck = true; }
         d.msgs.forEach(upsert);
         rev = d.rev; busy = d.busy;
+        if (d.nick !== nick) {   // someone switched the model
+          nick = d.nick; pick.textContent = nick + ' \u25be';
+          if (!inp.disabled) inp.placeholder = 'say something \u2014 ' + nick + ' is listening';
+        }
         hint();
         if (stuck && d.msgs.length) log.scrollTop = log.scrollHeight;
       })
@@ -1199,6 +1247,65 @@ CHAT_HTML = """
   inp.onkeydown = function (e) { if (e.key === 'Escape' && busy) say('/stop'); };
   document.addEventListener('visibilitychange', function () { if (!document.hidden) tick(); });
   tick();
+
+  // The model menu: installed models (one click switches the room to it) and
+  // a line to install another, with its progress.
+  var dlg = document.getElementById('md');
+  if (!dlg || !dlg.showModal) { pick.hidden = true; return; }
+  var list = dlg.querySelector('.md-list'), pform = dlg.querySelector('form'), pin = pform.querySelector('input');
+  var pgo = pform.querySelector('button'), pmsg = dlg.querySelector('.md-pull'), ptimer = null;
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function size(n) { return n >= 1e9 ? (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + ' GB' : Math.round(n / 1e6) + ' MB'; }
+  function post(path, model) {
+    return fetch(path, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+                         body: JSON.stringify({ model: model }) })
+      .then(function (r) { return r.ok ? r : r.text().then(function (t) { throw new Error(t.trim() || ('HTTP ' + r.status)); }); });
+  }
+  function say2(text, err) { pmsg.textContent = text; pmsg.classList.toggle('err', !!err); }
+  function draw(d) {
+    list.textContent = '';
+    if (!d.models.length) list.appendChild(el('div', 'md-m', 'No models installed yet.'));
+    d.models.forEach(function (m) {
+      var row = el('div', 'md-m' + (m.name === d.current ? ' cur' : ''));
+      row.appendChild(el('code', '', m.name));
+      row.appendChild(el('small', '', [m.detail, size(m.size)].filter(Boolean).join(' \u00b7 ')));
+      var b = el('button', m.name === d.current ? '' : 'go', m.name === d.current ? 'in use' : 'Use');
+      b.type = 'button'; b.disabled = m.name === d.current;
+      b.onclick = function () {
+        b.disabled = true;
+        post('/api/chat/model', m.name).then(function () { tick(); return refresh(); })
+          .catch(function (e) { say2('Could not switch: ' + e.message, true); b.disabled = false; });
+      };
+      row.appendChild(b); list.appendChild(row);
+    });
+    var p = d.pull;
+    pgo.disabled = !!(p && !p.done);
+    if (!p) return;
+    if (p.error) say2('Install of ' + p.name + ' failed: ' + p.error, true);
+    else if (p.done) say2('Installed ' + p.name + '.');
+    else say2('Installing ' + p.name + ': ' + (p.status || '') + (p.pct ? ' ' + p.pct + '%' : ''));
+    clearTimeout(ptimer);
+    if (!p.done && dlg.open) ptimer = setTimeout(refresh, 1500);
+  }
+  function refresh() {
+    return fetch('/api/chat/models', { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : r.text().then(function (t) { throw new Error(t.trim() || ('HTTP ' + r.status)); }); })
+      .then(draw);
+  }
+  pick.onclick = function () {
+    say2('');
+    refresh().then(function () { dlg.showModal(); }).catch(function (e) { alert('Could not load the models: ' + e.message); });
+  };
+  pform.onsubmit = function (e) {
+    e.preventDefault();
+    var name = pin.value.trim();
+    if (!name) return;
+    post('/api/chat/pull', name).then(function () { pin.value = ''; tick(); return refresh(); })
+      .catch(function (e) { say2(e.message, true); });
+  };
+  dlg.querySelector('.cancel').onclick = function () { dlg.close(); };
+  dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
+  dlg.addEventListener('close', function () { clearTimeout(ptimer); });
 })();
 </script>
 """
@@ -1834,6 +1941,98 @@ def api_nodes():
     return _node_rows_html(nodes_snapshot())
 
 
+# Which model the room talks to. It starts as CHAT_MODEL; the model menu can
+# switch it, and the choice is kept in a ConfigMap so a restart does not undo
+# it. The menu needs Ollama behind CHAT_URL (its /api/tags and /api/pull).
+_chosen = {"loaded": False, "model": ""}
+_pull = {}   # the install in progress or last finished: {name, status, pct, error, done}
+
+
+def chat_model():
+    if not _chosen["loaded"]:
+        _chosen["loaded"] = True
+        if CHAT_STATE_CONFIGMAP:
+            try:
+                cm = client.CoreV1Api().read_namespaced_config_map(CHAT_STATE_CONFIGMAP, self_namespace())
+                _chosen["model"] = (cm.data or {}).get("model", "")
+            except Exception:
+                pass  # never chosen: the default
+    return _chosen["model"] or CHAT_MODEL
+
+
+def chat_nick(model=None):
+    """A model's name in the room: its name's leading letters (llama3.3:70b ->
+    llama, hf.co/someone/Qwen-GGUF:Q8 -> qwen)."""
+    model = model or chat_model()
+    if model == CHAT_MODEL and CHAT_NICK:
+        return CHAT_NICK
+    m = re.match(r"[A-Za-z]+", model.rsplit("/", 1)[-1])
+    return m.group(0).lower() if m else "bot"
+
+
+def _chat_choose(model):
+    """Switch the room to `model` and remember it."""
+    _chosen.update(loaded=True, model=model)
+    if not CHAT_STATE_CONFIGMAP:
+        return
+    v1, ns = client.CoreV1Api(), self_namespace()
+    body = {"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": CHAT_STATE_CONFIGMAP, "namespace": ns}, "data": {"model": model}}
+    try:
+        v1.patch_namespaced_config_map(CHAT_STATE_CONFIGMAP, ns, {"data": {"model": model}})
+    except client.exceptions.ApiException as e:
+        if e.status != 404:
+            raise
+        v1.create_namespaced_config_map(ns, body)
+
+
+def _ollama(path, body=None, timeout=15):
+    req = urllib.request.Request(
+        OLLAMA_URL + path, data=None if body is None else json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"})
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def chat_models():
+    """[{name, size, detail}] for every model Ollama has installed."""
+    with _ollama("/api/tags") as r:
+        tags = json.loads(r.read().decode())
+    return sorted((
+        {"name": m["name"], "size": m.get("size", 0),
+         "detail": " ".join(filter(None, [(m.get("details") or {}).get("parameter_size", ""),
+                                          (m.get("details") or {}).get("quantization_level", "")]))}
+        for m in tags.get("models", [])), key=lambda m: m["name"])
+
+
+def _chat_pull(name, who):
+    """Install a model (ollama pull), on its own thread: progress goes to
+    _pull for the menu to show, and the room is told how it ended."""
+    try:
+        with _ollama("/api/pull", {"model": name, "stream": True}, timeout=900) as r:
+            for raw in r:
+                try:
+                    ev = json.loads(raw.decode("utf-8", "replace"))
+                except ValueError:
+                    continue
+                if ev.get("error"):
+                    _pull.update(error=str(ev["error"]))
+                    break
+                _pull["status"] = ev.get("status", "")
+                if ev.get("total"):
+                    _pull["pct"] = int(100 * ev.get("completed", 0) / ev["total"])
+    except urllib.error.HTTPError as e:
+        try:
+            _pull["error"] = json.loads(e.read(2000)).get("error", e.reason)
+        except Exception:
+            _pull["error"] = str(e.reason)
+    except Exception as e:
+        _pull["error"] = str(e)
+    _pull["done"] = True
+    with _roomlock:
+        _room_say("*", f"{who}'s install of {name} failed: {_pull['error']}" if _pull.get("error")
+                  else f"{who} installed {name}", bot=True)
+
+
 _ktoken = {"at": 0.0, "token": None}
 _ktlock = threading.Lock()
 
@@ -2120,8 +2319,9 @@ def _chat_open(messages, tools=True):
     whose template has no place for tools refuses the request outright (400):
     it is then asked again, and from then on, without them -- it can still
     chat, it just cannot look anything up."""
-    body = {"model": CHAT_MODEL, "stream": True, "messages": messages}
-    if tools and CHAT_MODEL not in _no_tools:
+    model = chat_model()
+    body = {"model": model, "stream": True, "messages": messages}
+    if tools and model not in _no_tools:
         body["tools"] = CHAT_TOOLS
 
     def go():
@@ -2135,7 +2335,7 @@ def _chat_open(messages, tools=True):
     except urllib.error.HTTPError as e:
         if e.code != 400 or "tools" not in body or b"tool" not in e.read(400).lower():
             raise
-        _no_tools.add(CHAT_MODEL)
+        _no_tools.add(model)
         del body["tools"]
         return go()
 
@@ -2260,12 +2460,13 @@ def _chat_html(gpus):
     """The chat window, live when the cluster has a GPU for the model to run
     on, greyed out (input disabled) when it has none."""
     on = gpus > 0
-    model = html.escape(CHAT_MODEL)
+    model, nick = html.escape(chat_model()), html.escape(chat_nick())
     page = CHAT_HTML
     for key, val in (
         ("__CLASS__", "" if on else "off"),
         ("__HINT__", "Running on the GPU in this cluster." if on else "No GPU in the cluster."),
-        ("__PLACEHOLDER__", f"say something &mdash; {html.escape(CHAT_NICK)} is listening"
+        ("__NICK__", nick),
+        ("__PLACEHOLDER__", f"say something &mdash; {nick} is listening"
          if on else "no GPU in the cluster"),
         ("__DISABLED__", "" if on else " disabled"),
         ("__MODEL__", model),
@@ -2287,7 +2488,7 @@ def _chat_system():
     where = f" for the cluster at {BASE_DOMAIN}" if BASE_DOMAIN else ""
     apps = ("\nWhat the cluster serves:\n" + "\n".join(lines)) if lines else ""
     return (
-        f"You are {CHAT_NICK}, the assistant in the chat room on Aviary, the landing page{where}. "
+        f"You are {chat_nick()}, the assistant in the chat room on Aviary, the landing page{where}. "
         "The room is shared, IRC style: everyone on the page sees it, and what people say "
         "reaches you as lines of the form <nick> message. Several people may be talking; "
         "answer the latest line, addressing people by nick when it helps. Write your reply "
@@ -2343,16 +2544,16 @@ def _room_reply():
         while True:
             with _roomlock:
                 msgs = _room["msgs"]
-                if not msgs or msgs[-1]["bot"]:
+                if not msgs or msgs[-1]["bot"]:   # (a notice counts as not-a-person)
                     return
                 history = [
                     {"role": "assistant", "content": m["text"]} if m["bot"]
                     else {"role": "user", "content": f"<{m['nick']}> {m['text']}"}
-                    for m in msgs[-CHAT_MAX_MESSAGES:] if m["text"]
+                    for m in msgs[-CHAT_MAX_MESSAGES:] if m["text"] and m["nick"] != "*"
                 ]
                 epoch = _room["epoch"]
                 _room["stop"] = False
-                mine = _room_say(CHAT_NICK, "", bot=True, done=False)
+                mine = _room_say(chat_nick(), "", bot=True, done=False)
             messages = [{"role": "system", "content": _chat_system()}] + history
             try:
                 for piece in _chat_relay(messages, _chat_open(messages)):
@@ -2400,12 +2601,64 @@ def api_chat_poll():
             after = 0
         out = {
             "epoch": _room["epoch"], "rev": _room["rev"], "busy": _room["busy"],
+            "nick": chat_nick(),
             "msgs": [{k: m[k] for k in ("id", "nick", "text", "bot", "done")}
                      for m in _room["msgs"] if m["rev"] > after],
         }
     response.content_type = "application/json"
     response.set_header("Cache-Control", "no-store")
     return json.dumps(out)
+
+
+@app.route("/api/chat/models")
+def api_chat_models():
+    """The model menu: what is installed, which one is in use, and how an
+    install in progress is getting on."""
+    if not CHAT_ENABLED:
+        return _chat_error(404, "chat is not configured\n")
+    try:
+        models = chat_models()
+    except Exception as e:
+        return _chat_error(502, f"cannot list models (is CHAT_URL an Ollama?): {e}\n")
+    response.content_type = "application/json"
+    response.set_header("Cache-Control", "no-store")
+    return json.dumps({"current": chat_model(), "nick": chat_nick(), "models": models, "pull": _pull or None})
+
+
+@app.route("/api/chat/model", method="POST")
+def api_chat_model_set():
+    """Switch the room -- for everybody in it -- to an installed model."""
+    if not CHAT_ENABLED:
+        return _chat_error(404, "chat is not configured\n")
+    name = str((request.json or {}).get("model", "")).strip()
+    try:
+        if name not in {m["name"] for m in chat_models()}:
+            return _chat_error(400, f"{name!r} is not an installed model\n")
+        if name != chat_model():
+            _chat_choose(name)
+            with _roomlock:
+                _room_say("*", f"{_chat_nick()} switched the model to {name} (now {chat_nick()})", bot=True)
+    except Exception as e:
+        return _chat_error(502, f"could not switch: {e}\n")
+    return "ok\n"
+
+
+@app.route("/api/chat/pull", method="POST")
+def api_chat_pull():
+    """Install a model by its Ollama name (llama3.3:70b, or hf.co/user/repo:quant)."""
+    if not CHAT_ENABLED:
+        return _chat_error(404, "chat is not configured\n")
+    name = str((request.json or {}).get("model", "")).strip()
+    if not re.fullmatch(r"[A-Za-z0-9][\w.\-/:]{0,199}", name):
+        return _chat_error(400, "give a model name like llama3.3:70b or hf.co/user/repo:Q4_K_M\n")
+    with _roomlock:
+        if _pull and not _pull.get("done"):
+            return _chat_error(409, f"{_pull['name']} is still installing\n")
+        _pull.clear()
+        _pull.update(name=name, status="starting", pct=0, error="", done=False)
+        _room_say("*", f"{_chat_nick()} is installing {name}", bot=True)
+    threading.Thread(target=_chat_pull, args=(name, _chat_nick()), daemon=True).start()
+    return "ok\n"
 
 
 @app.route("/api/chat", method="POST")

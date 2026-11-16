@@ -29,7 +29,11 @@ With `CHAT_URL` set to an OpenAI-compatible API (the cluster's Ollama:
 the fortune, IRC style: everyone on the page sees the same lines, each with
 its author's name in front (`<bmath> ...`), and the model (`CHAT_MODEL`,
 default `llama3`, speaking as `CHAT_NICK`) answers what is said. `/clear`
-empties the room, `/stop` or Escape cuts a reply short. The transcript is kept
+empties the room, `/stop` or Escape cuts a reply short. The name at the end
+of the input line opens the model menu: switch the room to any model Ollama
+has installed, or install another by name (`llama3.3:70b`,
+`hf.co/user/repo:Q4_K_M`). The choice is kept in the `aviary-chat` ConfigMap
+(`CHAT_STATE_CONFIGMAP`). The transcript is kept
 in memory, so the app runs as a single gunicorn worker and a restart empties
 the room. With no GPU in the cluster the room is greyed out.
 

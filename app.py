@@ -40,6 +40,14 @@ BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "")
 # trust store (several roots share the CN "Internal CA Root CA").
 CA_FILENAME = f"ca.{BASE_DOMAIN}.crt" if BASE_DOMAIN else "ca.crt"
 
+# Per-node disk throughput/IOPS come from the cluster's Prometheus
+# (kube-prometheus-stack node-exporter). Reached over its in-cluster http
+# service, so no extra TLS trust is needed; unset or unreachable -> '-'.
+PROMETHEUS_URL = os.environ.get(
+    "PROMETHEUS_URL",
+    "http://kube-prometheus-stack-prometheus.aviary-grafana.svc.cluster.local:9090",
+).rstrip("/")
+
 # --- Authentication (optional): log in via the local gitea's OAuth2, with a
 # shared-token bypass for automation. All inert unless the OAuth env is set, so
 # the page still runs without it. Server-to-server calls to gitea use its
@@ -132,6 +140,7 @@ def nodes():
             usage[n["metadata"]["name"]] = n["usage"]
     except Exception:
         pass  # metrics-server optional
+    io = node_disk_io()
     rows = []
     for n in v1.list_node().items:
         ready = next((c.status for c in n.status.conditions if c.type == "Ready"), "Unknown")
@@ -143,7 +152,13 @@ def nodes():
         if u:
             cpu = "%d%%" % (100 * _q(u["cpu"]) / _q(n.status.allocatable["cpu"]))
             mem = "%d%%" % (100 * _q(u["memory"]) / _q(n.status.allocatable["memory"]))
-        rows.append((n.metadata.name, roles, ready, n.status.node_info.kubelet_version, cpu, mem))
+        bps, iops = io.get(n.metadata.name, (None, None))
+        tput = f"{_hbytes(bps)}/s" if bps is not None else "-"
+        iops_s = _hiops(iops) if iops is not None else "-"
+        rows.append((
+            n.metadata.name, roles, ready, n.status.node_info.kubelet_version,
+            cpu, mem, tput, iops_s,
+        ))
     return rows
 
 
@@ -165,6 +180,14 @@ def _hbytes(n):
 
 def _hcpu(cores):
     return f"{cores * 1000:.0f}m" if cores < 1 else f"{cores:.1f}"
+
+
+def _hiops(x):
+    if x < 10:
+        return f"{x:.1f}"
+    if x < 1000:
+        return f"{x:.0f}"
+    return f"{x / 1000:.1f}k"
 
 
 def metrics():
@@ -197,6 +220,49 @@ def metrics():
     except Exception:
         pass
     return {"cpu": cpu, "mem": mem, "disk": disk}
+
+
+def _prom(expr):
+    """{nodename: float} for a Prometheus instant query, keyed by the series'
+    nodename label. {} on any error so the caller degrades to '-'."""
+    url = f"{PROMETHEUS_URL}/api/v1/query?query=" + urllib.parse.quote(expr)
+    try:
+        with urllib.request.urlopen(url, timeout=5) as r:
+            data = json.loads(r.read().decode())
+        return {
+            s["metric"].get("nodename", ""): float(s["value"][1])
+            for s in data.get("data", {}).get("result", [])
+        }
+    except Exception:
+        return {}
+
+
+def node_disk_io():
+    """{nodename: (bytes_per_s, iops)} from node-exporter via Prometheus.
+
+    The exporter labels series by `instance` (<nodeIP>:9100); node_uname_info
+    carries both that and `nodename`, so a group_left join relabels to the node.
+    Device-mapper (dm-*) devices are excluded so LVM volumes aren't counted on
+    top of the physical disks they sit on. Empty if Prometheus is unset or
+    unreachable, and the node table then shows '-'.
+    """
+    if not PROMETHEUS_URL:
+        return {}
+    dev = 'device!~"dm-.*"'
+    tput = _prom(
+        f"sum by (nodename) ((rate(node_disk_read_bytes_total{{{dev}}}[5m])"
+        f"+rate(node_disk_written_bytes_total{{{dev}}}[5m]))"
+        f" * on(instance) group_left(nodename) node_uname_info)"
+    )
+    iops = _prom(
+        f"sum by (nodename) ((rate(node_disk_reads_completed_total{{{dev}}}[5m])"
+        f"+rate(node_disk_writes_completed_total{{{dev}}}[5m]))"
+        f" * on(instance) group_left(nodename) node_uname_info)"
+    )
+    out = {}
+    for name in (set(tput) | set(iops)) - {""}:
+        out[name] = (tput.get(name), iops.get(name))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +430,18 @@ def snapshot():
         return _cache["data"]
 
 
+def _node_rows_html(rows):
+    """The <tbody> for the node table; also served on its own at /api/nodes so
+    the page can refresh it in place without a full reload."""
+    return "".join(
+        f"<tr><td>{html.escape(n)}</td><td>{html.escape(r)}</td>"
+        f'<td class="{"ok" if ready == "True" else "bad"}">{html.escape(ready)}</td>'
+        f"<td>{html.escape(v)}</td><td>{cpu}</td><td>{mem}</td>"
+        f"<td>{html.escape(tput)}</td><td>{html.escape(iops)}</td></tr>"
+        for n, r, ready, v, cpu, mem, tput, iops in rows
+    )
+
+
 PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Aviary</title>
 <link rel="icon" href="/favicon.ico">
@@ -427,12 +505,30 @@ PAGE = """<!doctype html>
 <h2>Apps</h2>
 <ul class="menu">{menu}</ul>
 <h2>Cluster</h2>
-<table><tr><th>Node</th><th>Role</th><th>Ready</th><th>Kubelet</th><th>CPU</th><th>Memory</th></tr>{nodes}</table>
+<table id="nodes"><thead><tr><th>Node</th><th>Role</th><th>Ready</th><th>Kubelet</th><th>CPU</th><th>Memory</th><th>Disk tput</th><th>IOPS</th></tr></thead><tbody id="noderows">{nodes}</tbody></table>
 <h2>/etc/hosts</h2>
 <p>If your resolver does not know these names:</p>
 <pre>{hosts}</pre>
 <footer>Served by {me}</footer>
-</main></body></html>
+</main>
+<script>
+// Keep the node table live without reloading the page: pull the <tbody> from
+// /api/nodes every 10s (carrying the session cookie) and swap it in. Silent on
+// error so a transient blip just leaves the last-good rows on screen.
+// (Braces are doubled because this page is rendered with str.format().)
+(function () {{
+  var tb = document.getElementById('noderows');
+  if (!tb) return;
+  function refresh() {{
+    fetch('/api/nodes', {{ credentials: 'same-origin' }})
+      .then(function (r) {{ return r.ok ? r.text() : Promise.reject(r.status); }})
+      .then(function (h) {{ tb.innerHTML = h; }})
+      .catch(function () {{}});
+  }}
+  setInterval(refresh, 10000);
+}})();
+</script>
+</body></html>
 """
 
 
@@ -576,12 +672,7 @@ def index():
             f'<div class="stat"><b>&mdash;</b><span>tput</span></div>'
             f"</div>{act}</li>"
         )
-    nodes_html = "".join(
-        f"<tr><td>{html.escape(n)}</td><td>{html.escape(r)}</td>"
-        f'<td class="{"ok" if ready == "True" else "bad"}">{html.escape(ready)}</td>'
-        f"<td>{html.escape(v)}</td><td>{cpu}</td><td>{mem}</td></tr>"
-        for n, r, ready, v, cpu, mem in d["nodes"]
-    )
+    nodes_html = _node_rows_html(d["nodes"])
     by_ip = {}
     for host, _, _, _, ip in d["routes"]:
         by_ip.setdefault(ip or "<gateway-ip>", []).append(host)
@@ -607,6 +698,14 @@ def index():
         hosts=html.escape(hosts),
         me=html.escape(me),
     )
+
+
+@app.route("/api/nodes")
+def api_nodes():
+    """The node table body, for the page's live refresh. Gated like the rest of
+    the app (not a public path), so the browser's session cookie carries in."""
+    response.content_type = "text/html; charset=utf-8"
+    return _node_rows_html(snapshot()["nodes"])
 
 
 @app.route("/app/<ns>/<rel>/uninstall", method="POST")

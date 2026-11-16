@@ -7,7 +7,10 @@ trigger:
   branch:
     - main
   event:
-    - push
+    - [ push, custom ]
+    
+clone:
+  skip_verify: true 
 
 clone:
   skip_verify: true

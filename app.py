@@ -103,6 +103,7 @@ BLURBS = {
     "postgres-ui": "Postgres operator UI",
     "rustpad": "Shared text editor",
     "mail": "Mail (Axigen WebMail)",
+    "dns": "Authoritative DNS for our domains (port 53)",
     "jitsi": "Video meetings (Jitsi Meet)",
     "mattermost": "Team chat",
     "bash": "In-cluster shell",
@@ -237,8 +238,87 @@ def gateways():
                 for l in gw.get("spec", {}).get("listeners", [])
                 if l.get("hostname") and l.get("protocol") == "HTTPS"
             },
+            "l4": {l["name"] for l in gw.get("spec", {}).get("listeners", [])
+                   if l.get("protocol") in ("UDP", "TCP")},
         }
     return out
+
+
+# Services that are not web pages (DNS) reach the Gateways through UDPRoutes and
+# TCPRoutes. Routes of the same name in a namespace are one service and one row
+# -- "dns" is a UDPRoute and a TCPRoute -- and its switches move them together.
+# A route attaches to the listener named <protocol>-<route name> (udp-dns).
+L4_KINDS = (("udp", "udproutes"), ("tcp", "tcproutes"))
+L4_VERSION = "v1"
+
+
+def l4_routes(gws):
+    """[(name, namespace, service, port, gateway_ip, group, route_namespace,
+    route_name, exposed, "")] -- the shape of routes() -- for every labelled
+    UDPRoute/TCPRoute pair. exposed lists the Gateways any of the pair is on."""
+    custom = client.CustomObjectsApi()
+    found = {}
+    for proto, plural in L4_KINDS:
+        try:
+            items = custom.list_cluster_custom_object(GATEWAY_API, L4_VERSION, plural).get("items", [])
+        except client.exceptions.ApiException:
+            continue  # the CRD is optional
+        for r in items:
+            group = (r["metadata"].get("labels") or {}).get(GROUP_LABEL, "")
+            if not group:
+                continue
+            ns, name = r["metadata"]["namespace"], r["metadata"]["name"]
+            spec = r.get("spec", {})
+            e = found.setdefault((ns, name), {"group": group, "parents": set(), "backend": None})
+            e["parents"] |= {(q.get("namespace", ns), q.get("name")) for q in spec.get("parentRefs") or []}
+            for rule in spec.get("rules", []):
+                for b in rule.get("backendRefs", []):
+                    e["backend"] = e["backend"] or (b.get("namespace", ns), b.get("name", ""), b.get("port", ""))
+    out = []
+    for (ns, name), e in sorted(found.items()):
+        if not e["backend"]:
+            continue
+        exposed = tuple(k for k, gw in EXPOSURES if (GATEWAY_NAMESPACE, gw) in e["parents"])
+        ip = next((gws[(GATEWAY_NAMESPACE, gw)]["ip"] for k, gw in EXPOSURES
+                   if k in exposed and gws.get((GATEWAY_NAMESPACE, gw), {}).get("ip")), "")
+        out.append((name, *e["backend"], ip, e["group"], ns, name, exposed, ""))
+    return out
+
+
+def set_l4_exposure(rns, rname, key, on):
+    """set_exposure for a UDPRoute/TCPRoute pair: each route of that name goes
+    on (or comes off) the Gateway's <protocol>-<name> listener."""
+    gw_name = dict(EXPOSURES)[key]
+    gw = gateways().get((GATEWAY_NAMESPACE, gw_name))
+    if on and not gw:
+        raise HTTPError(404, f"no {key} gateway ({GATEWAY_NAMESPACE}/{gw_name})\n")
+    custom = client.CustomObjectsApi()
+    done = 0
+    for proto, plural in L4_KINDS:
+        try:
+            r = custom.get_namespaced_custom_object(GATEWAY_API, L4_VERSION, rns, plural, rname)
+        except client.exceptions.ApiException as e:
+            if e.status == 404:
+                continue
+            raise
+        section = f"{proto}-{rname}"
+        if on and section not in gw["l4"]:
+            raise HTTPError(400, f"the {key} gateway has no {section} listener\n")
+        refs = r["spec"].get("parentRefs") or []
+        kept = [q for q in refs
+                if not (q.get("name") == gw_name and q.get("namespace", rns) == GATEWAY_NAMESPACE)]
+        done += 1
+        if on:
+            if len(kept) != len(refs):
+                continue  # already attached
+            kept.append({"group": GATEWAY_API, "kind": "Gateway", "name": gw_name,
+                         "namespace": GATEWAY_NAMESPACE, "sectionName": section})
+        elif len(kept) == len(refs):
+            continue  # already detached
+        r["spec"]["parentRefs"] = kept
+        custom.replace_namespaced_custom_object(GATEWAY_API, L4_VERSION, rns, plural, rname, r)
+    if not done:
+        raise HTTPError(404, "no such service\n")
 
 
 def routes(gws):
@@ -1022,6 +1102,7 @@ def snapshot():
             _cache["data"] = {
                 "gateways": gws,
                 "routes": routes(gws),
+                "l4": l4_routes(gws),
                 "nodes": nodes(),
                 "metrics": metrics(),
                 "releases": releases(),
@@ -1622,6 +1703,7 @@ PAGE = """<!doctype html>
  ul.menu li .app {{ flex: 1 1 auto; min-width: 0; }}
  ul.menu li .app a {{ text-decoration: none; color: #1a4d8f; font-size: 20px; }}
  ul.menu li.off .app a {{ color: #888; }}
+ ul.menu li .app .noweb {{ color: #1a4d8f; font-size: 20px; cursor: default; }}
  ul.menu li .app small {{ display: block; font-size: 13px; color: #666; }}
  ul.menu li .stats {{ display: flex; gap: 12px; flex: 0 0 auto; }}
  /* A fixed width, not a minimum: the heading line and the rows must agree, and
@@ -1807,7 +1889,8 @@ def index():
     rels = d["releases"]
     gws = d["gateways"]
     shown = [(k, gw) for k, gw in EXPOSURES if (GATEWAY_NAMESPACE, gw) in gws]
-    for host, ns, svc, port, ip, group, rns, rname, exposed, pub in d["routes"]:
+    rows = [(r, False) for r in d["routes"]] + [(r, True) for r in d.get("l4", [])]
+    for (host, ns, svc, port, ip, group, rns, rname, exposed, pub), l4 in rows:
         me_too = svc == "aviary-frontend"  # that's us: listed first under System
         label = host.split(".", 1)[0]
         blurb = "This page" if me_too else BLURBS.get(label, f"{ns}/{svc}:{port}")
@@ -1866,6 +1949,8 @@ def index():
                 continue
             on = key in exposed
             where = f"the {key} gateway ({gws[(GATEWAY_NAMESPACE, gw)]['ip'] or gw})"
+            if l4:
+                where += f" port {port}"
             if key == "public" and pub:
                 where += f" as {pub}"
             ask = (
@@ -1876,6 +1961,7 @@ def index():
                 f'<form class="sw {key}" method="post" '
                 f'action="/app/{html.escape(rns)}/{html.escape(rname)}/expose"{ask}>'
                 f'<input type="hidden" name="gw" value="{key}">'
+                f'{"<input type=hidden name=l4 value=1>" if l4 else ""}'
                 f'<input type="hidden" name="on" value="{0 if on else 1}">'
                 f'<button role="switch" aria-checked="{"true" if on else "false"}" '
                 f'aria-label="{html.escape(label)} on {key} gateway" '
@@ -1885,7 +1971,8 @@ def index():
             )
         row = (
             f'<li class="{"off" if off else ""}"><div class="app">'
-            f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>'
+            + (f'<span class="noweb" title="not a web page: {html.escape(svc)} port {port}">{html.escape(label)}</span>'
+               if l4 else f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>') +
             f"<small>{html.escape(blurb)}</small></div>"
             f'<div class="stats">'
             f'<div class="stat"><b{cpu_heat}>{cpu}</b></div>'
@@ -2813,11 +2900,12 @@ def app_expose(rns, rname):
     key, on = request.forms.get("gw", ""), request.forms.get("on", "")
     if key not in dict(EXPOSURES) or on not in ("0", "1"):
         raise HTTPError(400, "need gw=private|public and on=0|1\n")
-    route = next((r for r in snapshot()["routes"] if (r[6], r[7]) == (rns, rname)), None)
+    l4 = request.forms.get("l4") == "1"
+    route = next((r for r in snapshot()["l4" if l4 else "routes"] if (r[6], r[7]) == (rns, rname)), None)
     if not route or _is_system(route[0], route[2], route[5]):
         raise HTTPError(404, "no such app\n")
     try:
-        set_exposure(rns, rname, key, on == "1")
+        (set_l4_exposure if l4 else set_exposure)(rns, rname, key, on == "1")
     except client.exceptions.ApiException as e:
         raise HTTPError(409 if e.status in (409, 422) else 502, f"HTTPRoute {rname}: {e.reason}\n")
     _bump()

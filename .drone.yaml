@@ -18,7 +18,9 @@ steps:
   settings:
     registry: registry.mesh.bmath.nyc
     repo: registry.mesh.bmath.nyc/aviary-frontend
-    tags: latest
+    tags:
+      - latest
+      - "${DRONE_COMMIT_SHA:0:8}"
     username: mesh
     password:
       from_secret: mesh_registry_password

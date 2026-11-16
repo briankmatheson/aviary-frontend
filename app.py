@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 import shutil
+import ssl
 import subprocess
 import tempfile
 import threading
@@ -277,8 +278,249 @@ def metrics():
     except Exception:
         pass
     cpu_max, mem_max, unset = app_limits()
+    tuned = set()
+    try:
+        tuned = {
+            lr.metadata.namespace
+            for lr in v1.list_limit_range_for_all_namespaces().items
+            if lr.metadata.name == LIMITRANGE
+        }
+    except Exception:
+        pass
     return {"cpu": cpu, "mem": mem, "disk": disk,
-            "cpu_max": cpu_max, "mem_max": mem_max, "unset": unset}
+            "cpu_max": cpu_max, "mem_max": mem_max, "unset": unset, "tuned": tuned}
+
+
+# ---------------------------------------------------------------------------
+# Images: the image menu can retag a workload, but only for images that live in
+# the mesh registry (our own builds) -- that is the one registry we can list
+# and date tags for. Credentials come from the pull secret already in this
+# namespace; its cert is signed by the internal CA, trusted via the
+# trust-manager bundle ConfigMap (read over the API, so no extra mount).
+# ---------------------------------------------------------------------------
+IMAGE_REGISTRY = os.environ.get("IMAGE_REGISTRY", "registry.mesh.bmath.nyc")
+IMAGE_PULL_SECRET = os.environ.get("IMAGE_PULL_SECRET", "mesh-reg")
+CA_BUNDLE_CONFIGMAP = os.environ.get("CA_BUNDLE_CONFIGMAP", "xdebbie-ca-bundle")
+_MANIFEST_TYPES = ", ".join((
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+))
+_rcache = {"at": 0.0, "auth": None, "ctx": None}
+_tcache = {}
+_rlock = threading.Lock()
+
+
+def self_namespace():
+    try:
+        with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as f:
+            return f.read().strip()
+    except OSError:
+        return os.environ.get("POD_NAMESPACE", "aviary")
+
+
+def _registry_access():
+    """(Authorization header, ssl context) for the mesh registry, cached 5 min."""
+    with _rlock:
+        if time.time() - _rcache["at"] > 300:
+            v1 = client.CoreV1Api()
+            ns = self_namespace()
+            sec = v1.read_namespaced_secret(IMAGE_PULL_SECRET, ns)
+            auths = json.loads(base64.b64decode(sec.data[".dockerconfigjson"]))["auths"]
+            a = auths[IMAGE_REGISTRY]
+            token = a.get("auth") or base64.b64encode(
+                f"{a['username']}:{a['password']}".encode()).decode()
+            ctx = ssl.create_default_context()
+            try:
+                cm = v1.read_namespaced_config_map(CA_BUNDLE_CONFIGMAP, ns)
+                ctx.load_verify_locations(cadata="".join((cm.data or {}).values()))
+            except Exception:
+                pass  # no bundle: system roots only
+            _rcache.update(at=time.time(), auth=f"Basic {token}", ctx=ctx)
+        return _rcache["auth"], _rcache["ctx"]
+
+
+def _registry_json(path, accept=None):
+    auth, ctx = _registry_access()
+    headers = {"Authorization": auth}
+    if accept:
+        headers["Accept"] = accept
+    req = urllib.request.Request(f"https://{IMAGE_REGISTRY}/v2/{path}", headers=headers)
+    with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
+        return json.loads(r.read().decode())
+
+
+def _tag_created(repo, tag):
+    """When the image behind a tag was built (its config's `created`), or ""."""
+    try:
+        m = _registry_json(f"{repo}/manifests/{tag}", _MANIFEST_TYPES)
+        if "manifests" in m:  # multi-arch index: date its first image
+            m = _registry_json(f"{repo}/manifests/{m['manifests'][0]['digest']}", _MANIFEST_TYPES)
+        return _registry_json(f"{repo}/blobs/{m['config']['digest']}").get("created", "")
+    except Exception:
+        return ""
+
+
+def image_tags(repo):
+    """Tags to offer for a mesh-registry repository: `latest` first (if it
+    exists), then the five most recently built others. Cached for a minute."""
+    hit = _tcache.get(repo)
+    if hit and time.time() - hit[0] < 60:
+        return hit[1]
+    tags = _registry_json(f"{repo}/tags/list").get("tags") or []
+    dated = sorted(((_tag_created(repo, t), t) for t in tags if t != "latest"), reverse=True)
+    out = (["latest"] if "latest" in tags else []) + [t for _, t in dated[:5]]
+    _tcache[repo] = (time.time(), out)
+    return out
+
+
+def _mesh_image(image):
+    """(repo, tag) if image is a tagged mesh-registry image, else None."""
+    prefix = IMAGE_REGISTRY + "/"
+    if not image.startswith(prefix) or "@" in image:
+        return None
+    repo, _, tag = image[len(prefix):].rpartition(":")
+    return (repo, tag) if repo else (tag, "latest")
+
+
+_WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet")
+
+
+def _workload_api(kind):
+    apps = client.AppsV1Api()
+    return {
+        "Deployment": (apps.list_namespaced_deployment, apps.read_namespaced_deployment,
+                       apps.patch_namespaced_deployment),
+        "StatefulSet": (apps.list_namespaced_stateful_set, apps.read_namespaced_stateful_set,
+                        apps.patch_namespaced_stateful_set),
+        "DaemonSet": (apps.list_namespaced_daemon_set, apps.read_namespaced_daemon_set,
+                      apps.patch_namespaced_daemon_set),
+    }[kind]
+
+
+def app_images(ns):
+    """Every workload in ns with its containers' images, for the image menu.
+    A container on a mesh-registry image also carries the tags it may be set to
+    (`tags`); the rest are listed read-only (`tags` is None)."""
+    out = []
+    for kind in _WORKLOAD_KINDS:
+        for w in _workload_api(kind)[0](ns).items:
+            containers = []
+            for c in w.spec.template.spec.containers:
+                mesh = _mesh_image(c.image)
+                tags = tag = None
+                if mesh:
+                    tag = mesh[1]
+                    try:
+                        tags = image_tags(mesh[0])
+                    except Exception:
+                        tags = []  # registry unreachable: show, but nothing to pick
+                    if tag not in tags:
+                        tags = tags + [tag]  # keep the running tag selectable
+                containers.append({"name": c.name, "image": c.image, "tag": tag, "tags": tags})
+            out.append({"kind": kind, "name": w.metadata.name, "containers": containers})
+    return out
+
+
+def image_namespaces():
+    """Where the image menu works: the apps, plus this page's own namespace."""
+    return app_namespaces() | {self_namespace()}
+
+
+# The per-namespace LimitRange the requests/limits popup writes: default request
+# and limit for every container in the app that does not set its own.
+LIMITRANGE = "aviary-defaults"
+
+
+def _limit_range(ns):
+    """(request, limit) dicts of quantities from the app's LimitRange, or
+    ({}, {}) if it has none."""
+    try:
+        lr = client.CoreV1Api().read_namespaced_limit_range(LIMITRANGE, ns)
+    except Exception:
+        return {}, {}
+    for item in lr.spec.limits or []:
+        if item.type == "Container":
+            return item.default_request or {}, item.default or {}
+    return {}, {}
+
+
+def app_resources(ns):
+    """What the requests/limits popup needs for one app, per resource, in
+    millicores (cpu) and Mi (memory):
+
+      usage      the app's busiest container right now (the values are per
+                 container, so that is the one a limit has to clear)
+      top        the scale's maximum: the largest node, since no container can
+                 be given more
+      floor      the lowest limit that keeps every pod admissible: a container
+                 that sets a request but no limit is rejected if the default
+                 limit is below its request
+      request,
+      limit      the LimitRange's current values, or a suggestion if unset
+      saved      whether those came from an existing LimitRange
+    """
+    v1 = client.CoreV1Api()
+    unit = {"cpu": 1e-3, "memory": 2**20}
+    usage = {"cpu": 0.0, "memory": 0.0}
+    try:
+        for p in client.CustomObjectsApi().list_namespaced_custom_object(
+            "metrics.k8s.io", "v1beta1", ns, "pods"
+        ).get("items", []):
+            for c in p.get("containers", []):
+                for res in usage:
+                    usage[res] = max(usage[res], _q(c["usage"][res]))
+    except Exception:
+        pass  # metrics-server optional: the fill just stays empty
+    top = {"cpu": 0.0, "memory": 0.0}
+    for n in v1.list_node().items:
+        for res in top:
+            top[res] = max(top[res], _q(n.status.capacity[res]))
+    floor = {"cpu": 0.0, "memory": 0.0}
+    for p in v1.list_namespaced_pod(ns).items:
+        for c in p.spec.containers + (p.spec.init_containers or []):
+            req = (c.resources.requests if c.resources else None) or {}
+            lim = (c.resources.limits if c.resources else None) or {}
+            for res in floor:
+                if res in req and res not in lim:
+                    floor[res] = max(floor[res], _q(req[res]))
+    req, lim = _limit_range(ns)
+    least = {"cpu": 0.010, "memory": 32 * 2**20}  # smallest sensible suggestion
+    out = {"saved": bool(req or lim)}
+    for res, key in (("cpu", "cpu"), ("memory", "mem")):
+        r = _q(req[res]) if res in req else max(usage[res] * 1.25, least[res])
+        l = _q(lim[res]) if res in lim else max(2 * r, floor[res])
+        l = min(l, top[res])
+        out[key] = {
+            "usage": usage[res] / unit[res],
+            "top": top[res] / unit[res],
+            "floor": floor[res] / unit[res],
+            "request": min(r, l) / unit[res],
+            "limit": l / unit[res],
+        }
+    return out
+
+
+def app_namespaces():
+    """Namespaces the menu lists as apps: the only ones the popup may change."""
+    return {ns for _, ns, svc, _, _, _ in snapshot()["routes"] if svc != "aviary-frontend"}
+
+
+def restart_workloads(ns):
+    """Roll every Deployment/StatefulSet/DaemonSet in ns (as kubectl rollout
+    restart does), so pods are recreated and pick up the new defaults."""
+    apps = client.AppsV1Api()
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    body = {"spec": {"template": {"metadata": {"annotations": {
+        "kubectl.kubernetes.io/restartedAt": stamp}}}}}
+    for lister, patch in (
+        (apps.list_namespaced_deployment, apps.patch_namespaced_deployment),
+        (apps.list_namespaced_stateful_set, apps.patch_namespaced_stateful_set),
+        (apps.list_namespaced_daemon_set, apps.patch_namespaced_daemon_set),
+    ):
+        for w in lister(ns).items:
+            patch(w.metadata.name, ns, body)
 
 
 def app_limits():
@@ -599,6 +841,226 @@ def _node_rows_html(rows):
     )
 
 
+RL_CSS = """
+ ul.menu li .app .warn { display: inline-block; width: 22px; height: 22px; padding: 0; margin-left: 6px;
+   border: 0; border-radius: 50%; background: #d11a2a; color: #e5e5e5; font: 700 15px/22px system-ui, sans-serif;
+   text-align: center; vertical-align: 3px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+ ul.menu li .app .warn:hover { background: #a80f1d; }
+ ul.menu li .app .warn.set { background: #c9ced6; color: #555; font-size: 13px; }
+ ul.menu li .app .warn.set:hover { background: #b3bac4; }
+ dialog#rl { border: 0; border-radius: 10px; padding: 22px 26px; width: min(560px, 92vw);
+   box-shadow: 0 12px 40px rgba(0,0,0,.3); font: 15px/1.4 system-ui, sans-serif; color: #222; }
+ dialog#rl::backdrop { background: rgba(20,30,45,.45); }
+ #rl h3 { margin: 0 0 4px; font-size: 20px; }
+ #rl p.note { margin: 0 0 18px; font-size: 13px; color: #666; }
+ #rl .rl-row { margin-bottom: 20px; }
+ #rl .rl-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; color: #555; }
+ #rl .rl-head b { font-size: 15px; color: #222; }
+ #rl .rl-head .now { font-variant-numeric: tabular-nums; }
+ #rl .rl-slider { position: relative; height: 34px; margin-top: 6px; }
+ #rl .rl-track { position: absolute; left: 0; right: 0; top: 11px; height: 12px; border-radius: 6px;
+   background: #e6e9ee; overflow: hidden; }
+ #rl .rl-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; }
+ #rl .rl-band { position: absolute; top: 9px; height: 16px; border: 2px solid #1a4d8f; border-radius: 8px;
+   box-sizing: border-box; pointer-events: none; }
+ #rl .rl-slider input[type=range] { position: absolute; left: 0; top: 0; width: 100%; height: 34px; margin: 0;
+   background: none; pointer-events: none; -webkit-appearance: none; appearance: none; }
+ #rl .rl-slider input[type=range]::-webkit-slider-runnable-track { background: none; height: 34px; }
+ #rl .rl-slider input[type=range]::-moz-range-track { background: none; }
+ #rl .rl-slider input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; pointer-events: auto;
+   width: 20px; height: 20px; margin-top: 7px; border-radius: 50%; background: #fff; border: 3px solid #1a4d8f;
+   cursor: grab; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+ #rl .rl-slider input[type=range]::-moz-range-thumb { pointer-events: auto; width: 14px; height: 14px;
+   border-radius: 50%; background: #fff; border: 3px solid #1a4d8f; cursor: grab; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+ #rl .rl-vals { display: flex; justify-content: space-between; font-size: 13px; color: #555;
+   font-variant-numeric: tabular-nums; margin-top: 2px; }
+ #rl .rl-vals b { color: #1a4d8f; }
+ #rl .rl-foot { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+ #rl .rl-foot label { flex: 1 1 auto; font-size: 14px; color: #444; }
+ #rl .rl-foot button { cursor: pointer; padding: 7px 16px; border-radius: 6px; border: 1px solid #d8dde5;
+   background: #fff; font-size: 14px; }
+ #rl .rl-foot button.go { background: #1a4d8f; border-color: #1a4d8f; color: #fff; }
+ #rl .rl-err { color: #b00020; font-size: 13px; min-height: 18px; margin-top: 8px; }
+"""
+
+RL_HTML = """
+<dialog id="rl"><form method="post">
+ <h3>Requests &amp; limits: <span id="rl-app"></span></h3>
+ <p class="note">Defaults for each container in this app that sets none of its own
+ (a namespace LimitRange). The bar is filled to the app's busiest container.</p>
+ <div class="rl-row" data-res="cpu"><div class="rl-head"><b>CPU</b><span class="now"></span></div>
+  <div class="rl-slider"><div class="rl-track"><div class="rl-fill"></div></div><div class="rl-band"></div>
+   <input type="range" class="lo" min="0" max="1000" step="1" aria-label="CPU request">
+   <input type="range" class="hi" min="0" max="1000" step="1" aria-label="CPU limit"></div>
+  <div class="rl-vals"><span>request <b class="req"></b></span><span>limit <b class="lim"></b></span></div>
+  <input type="hidden" name="cpu_request"><input type="hidden" name="cpu_limit"></div>
+ <div class="rl-row" data-res="mem"><div class="rl-head"><b>Memory</b><span class="now"></span></div>
+  <div class="rl-slider"><div class="rl-track"><div class="rl-fill"></div></div><div class="rl-band"></div>
+   <input type="range" class="lo" min="0" max="1000" step="1" aria-label="Memory request">
+   <input type="range" class="hi" min="0" max="1000" step="1" aria-label="Memory limit"></div>
+  <div class="rl-vals"><span>request <b class="req"></b></span><span>limit <b class="lim"></b></span></div>
+  <input type="hidden" name="mem_request"><input type="hidden" name="mem_limit"></div>
+ <div class="rl-foot"><label><input type="checkbox" name="restart" value="1"> restart the app now to apply</label>
+  <button type="button" class="cancel">Cancel</button><button class="go">Apply</button></div>
+ <div class="rl-err"></div>
+</form></dialog>
+<script>
+// Requests/limits popup. Each row is a two-thumb slider: left thumb = request,
+// right thumb = limit, track filled to current usage. Values are millicores
+// (cpu) and Mi (memory). Positions run 0..1000 on a cubic scale so the low end,
+// where most containers live, gets most of the travel.
+(function () {
+  var dlg = document.getElementById('rl');
+  if (!dlg || !dlg.showModal) return;
+  var form = dlg.querySelector('form'), err = dlg.querySelector('.rl-err');
+  function fmt(res, v) {
+    if (res === 'cpu') return v < 1000 ? Math.round(v) + 'm' : (v / 1000).toFixed(1);
+    return v < 1024 ? Math.round(v) + 'Mi' : (v / 1024).toFixed(1) + 'Gi';
+  }
+  // Snap to tidy steps: 5m / 4Mi at the bottom, coarser as values grow.
+  function snap(res, v) {
+    var step = res === 'cpu' ? (v < 100 ? 5 : v < 1000 ? 10 : 100) : (v < 128 ? 4 : v < 1024 ? 16 : 128);
+    return Math.max(step, Math.round(v / step) * step);
+  }
+  function setup(row, d) {
+    var res = row.dataset.res, lo = row.querySelector('.lo'), hi = row.querySelector('.hi');
+    var pos = function (v) { return 1000 * Math.cbrt(Math.min(1, Math.max(0, v / d.top))); };
+    var val = function (p) { return d.top * Math.pow(p / 1000, 3); };
+    var top = Math.floor(d.top), floor = Math.min(top, Math.ceil(d.floor));
+    function draw(moved) {
+      var r = Math.min(snap(res, val(+lo.value)), top), l = Math.min(snap(res, val(+hi.value)), top);
+      if (l < floor) l = floor;
+      if (r > l) { if (moved === hi) r = l; else l = r; }
+      lo.value = pos(r); hi.value = pos(l);
+      row.querySelector('.req').textContent = fmt(res, r);
+      row.querySelector('.lim').textContent = fmt(res, l);
+      row.querySelector('[name=' + res + '_request]').value = r;
+      row.querySelector('[name=' + res + '_limit]').value = l;
+      var band = row.querySelector('.rl-band');
+      band.style.left = pos(r) / 10 + '%'; band.style.width = Math.max(0, pos(l) - pos(r)) / 10 + '%';
+      // Fill: usage on the same scale, coloured by how close it is to the limit.
+      var fill = row.querySelector('.rl-fill'), f = Math.min(1, d.usage / l);
+      fill.style.width = pos(d.usage) / 10 + '%';
+      fill.style.background = 'hsl(' + Math.round(240 * (1 - f)) + ',85%,55%)';
+      // Whichever thumb is nearer the pointer's side stays on top when they meet.
+      lo.style.zIndex = +lo.value > 500 ? 3 : 2; hi.style.zIndex = +lo.value > 500 ? 2 : 3;
+    }
+    lo.value = pos(d.request); hi.value = pos(d.limit);
+    lo.oninput = function () { draw(lo); }; hi.oninput = function () { draw(hi); };
+    row.querySelector('.now').textContent = 'busiest container now: ' + fmt(res, d.usage);
+    draw();
+  }
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest ? e.target.closest('button.warn') : null;
+    if (!b) return;
+    fetch('/api/app/' + encodeURIComponent(b.dataset.ns) + '/resources', { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (d) {
+        form.action = '/app/' + encodeURIComponent(b.dataset.ns) + '/resources';
+        document.getElementById('rl-app').textContent = b.dataset.app;
+        form.restart.checked = false; err.textContent = '';
+        dlg.querySelectorAll('.rl-row').forEach(function (row) { setup(row, d[row.dataset.res]); });
+        dlg.showModal();
+      })
+      .catch(function (x) { alert('Could not load requests and limits (' + x + ')'); });
+  });
+  dlg.querySelector('.cancel').onclick = function () { dlg.close(); };
+  dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
+})();
+</script>
+"""
+
+IMG_CSS = """
+ dialog#im { border: 0; border-radius: 10px; padding: 22px 26px; width: min(720px, 94vw); max-height: 86vh;
+   box-shadow: 0 12px 40px rgba(0,0,0,.3); font: 15px/1.4 system-ui, sans-serif; color: #222; }
+ dialog#im::backdrop { background: rgba(20,30,45,.45); }
+ #im h3 { margin: 0 0 4px; font-size: 20px; }
+ #im p.note { margin: 0 0 14px; font-size: 13px; color: #666; }
+ #im .im-list { display: flex; flex-direction: column; gap: 8px; }
+ #im .im-w { padding: 10px 12px; background: #f5f6f8; border-radius: 8px; }
+ #im .im-w .im-name { font-weight: 600; }
+ #im .im-w .im-name small { font-weight: 400; color: #888; margin-left: 6px; font-size: 12px;
+   text-transform: uppercase; letter-spacing: .5px; }
+ #im .im-c { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 13px; }
+ #im .im-c code { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; color: #444;
+   font: 12px/1.4 ui-monospace, monospace; }
+ #im .im-c form { display: flex; gap: 6px; margin: 0; flex: 0 0 auto; }
+ #im .im-c select, #im .im-c button, #im .im-foot button { font-size: 13px; padding: 4px 10px; border-radius: 6px;
+   border: 1px solid #d8dde5; background: #fff; cursor: pointer; }
+ #im .im-c button { background: #1a4d8f; border-color: #1a4d8f; color: #fff; }
+ #im .im-c button:disabled { background: #c9ced6; border-color: #c9ced6; cursor: default; }
+ #im .im-foot { text-align: right; margin-top: 16px; }
+"""
+
+IMG_HTML = """
+<dialog id="im">
+ <h3>Images: <span id="im-app"></span></h3>
+ <p class="note">Every workload in the app's namespace. Images from the mesh registry can be
+ retagged: <b>latest</b>, then the five most recently built tags.</p>
+ <div class="im-list"></div>
+ <div class="im-foot"><button type="button" class="cancel">Close</button></div>
+</dialog>
+<script>
+// Image menu: one block per workload, one line per container; a mesh-registry
+// image gets a tag picker that posts to /app/<ns>/image.
+(function () {
+  var dlg = document.getElementById('im');
+  if (!dlg || !dlg.showModal) return;
+  var list = dlg.querySelector('.im-list');
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function hidden(form, name, value) {
+    var i = el('input'); i.type = 'hidden'; i.name = name; i.value = value; form.appendChild(i);
+  }
+  function render(ns, workloads) {
+    list.textContent = '';
+    if (!workloads.length) list.appendChild(el('div', 'im-w', 'No workloads in this namespace.'));
+    workloads.forEach(function (w) {
+      var box = el('div', 'im-w'), name = el('div', 'im-name', w.name);
+      name.appendChild(el('small', '', w.kind));
+      box.appendChild(name);
+      w.containers.forEach(function (c) {
+        var row = el('div', 'im-c');
+        row.appendChild(el('code', '', (w.containers.length > 1 ? c.name + ': ' : '') + c.image));
+        if (c.tags && c.tags.length) {
+          var form = el('form'); form.method = 'post';
+          form.action = '/app/' + encodeURIComponent(ns) + '/image';
+          hidden(form, 'kind', w.kind); hidden(form, 'name', w.name); hidden(form, 'container', c.name);
+          var sel = el('select'); sel.name = 'tag';
+          c.tags.forEach(function (t) {
+            var o = el('option', '', t); o.value = t; o.selected = t === c.tag; sel.appendChild(o);
+          });
+          var go = el('button', '', 'Set'); go.disabled = true;
+          sel.onchange = function () { go.disabled = sel.value === c.tag; };
+          form.appendChild(sel); form.appendChild(go); row.appendChild(form);
+        }
+        box.appendChild(row);
+      });
+      list.appendChild(box);
+    });
+  }
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest ? e.target.closest('button.imgs') : null;
+    if (!b) return;
+    fetch('/api/app/' + encodeURIComponent(b.dataset.ns) + '/images', { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (d) {
+        document.getElementById('im-app').textContent = b.dataset.app;
+        render(b.dataset.ns, d);
+        dlg.showModal();
+      })
+      .catch(function (x) { alert('Could not load images (' + x + ')'); });
+  });
+  dlg.querySelector('.cancel').onclick = function () { dlg.close(); };
+  dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
+})();
+</script>
+"""
+
 PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Aviary</title>
 <link rel="icon" href="/favicon.ico">
@@ -634,7 +1096,6 @@ PAGE = """<!doctype html>
  ul.menu li .app {{ flex: 1 1 auto; min-width: 0; }}
  ul.menu li .app a {{ text-decoration: none; color: #1a4d8f; font-size: 20px; }}
  ul.menu li.off .app a {{ color: #888; }}
- ul.menu li .app .warn {{ color: #c2410c; font-size: 20px; font-weight: 700; cursor: help; }}
  ul.menu li .app small {{ display: block; font-size: 13px; color: #666; }}
  ul.menu li .stats {{ display: flex; gap: 12px; flex: 0 0 auto; }}
  ul.menu li .stat {{ text-align: right; min-width: 62px; }}
@@ -645,6 +1106,11 @@ PAGE = """<!doctype html>
                            width: 30px; height: 30px; font-size: 14px; line-height: 1; color: #777; }}
  ul.menu li .act.stop button:hover {{ background: #ffecec; border-color: #e0a0a0; color: #b00020; }}
  ul.menu li .act.start button:hover {{ background: #e8f5e9; border-color: #a0cfa5; color: #1b7f3b; }}
+ ul.menu li .act.restart, ul.menu li .act.images {{ margin-left: -12px; }}
+ footer button.imgs {{ cursor: pointer; margin-left: 8px; padding: 2px 8px; border: 1px solid #d8dde5; border-radius: 6px;
+                      background: rgba(255,255,255,.85); color: #777; font-size: 12px; }}
+ ul.menu li .act.restart button {{ font-size: 17px; }}
+ ul.menu li .act.restart button:hover {{ background: #e8f0fb; border-color: #9db8dc; color: #1a4d8f; }}
  table {{ border-collapse: collapse; background: rgba(255,255,255,.85); width: 100%; font-size: 14px; }}
  th, td {{ text-align: left; padding: 6px 10px; border-bottom: 1px solid #e3e3df; }}
  th {{ color: #666; font-weight: 600; }}
@@ -654,7 +1120,7 @@ PAGE = """<!doctype html>
  .heat {{ font-weight: 600; font-variant-numeric: tabular-nums; }}
  .ok {{ color: #1b7f3b; }} .bad {{ color: #b00020; }}
  footer {{ margin-top: 48px; color: #888; font-size: 13px; }}
-</style></head><body><main>
+{rl_css}</style></head><body><main>
 <div class="hdr">
 <nav><a href="/{ca_name}" download="{ca_name}" title="Cluster CA: trust this to stop the browser warnings">{ca_name}</a></nav>
 <div class="corner"><div class="host">{host}</div>{auth_nav}</div>
@@ -665,12 +1131,13 @@ PAGE = """<!doctype html>
 <ul class="menu">{menu}</ul>
 {system}
 <h2>Cluster</h2>
-<table id="nodes"><thead><tr><th>Node</th><th>Role</th><th>Ready</th><th>Kubelet</th><th>CPU</th><th>Memory</th><th>Disk Capacity</th><th>Disk Throughput</th><th>Disk vIOPS</th></tr></thead><tbody id="noderows">{nodes}</tbody></table>
+<table id="nodes"><thead><tr><th>Node</th><th>Role</th><th>Ready</th><th>Kubelet</th><th>CPU</th><th>Memory</th><th>Disk Cap</th><th>Disk Tput</th><th>Disk IOPS</th></tr></thead><tbody id="noderows">{nodes}</tbody></table>
 <h2>/etc/hosts</h2>
 <p>If your resolver does not know these names:</p>
 <pre>{hosts}</pre>
-<footer>Served by {me}</footer>
+<footer>Served by {me} <button type="button" class="imgs" data-ns="{self_ns}" data-app="aviary" title="this page's own image">image &#9776;</button></footer>
 </main>
+{rl_html}
 <script>
 // Keep the node table live without reloading the page: pull the <tbody> from
 // /api/nodes (carrying the session cookie) and swap it in. Self-scheduling --
@@ -815,7 +1282,17 @@ def index():
         warn = ""
         if gaps:
             tip = "containers without: " + ", ".join(f"{k} ({n})" for k, n in sorted(gaps.items()))
-            warn = f' <span class="warn" title="{html.escape(tip)}">!</span>'
+            warn = (
+                f' <button type="button" class="warn" data-ns="{html.escape(ns)}" '
+                f'data-app="{html.escape(label)}" title="{html.escape(tip)} '
+                f'&#10;click to set requests and limits">!</button>'
+            )
+        elif ns in m["tuned"]:
+            # Nothing missing any more, but keep a way back to the sliders.
+            warn = (
+                f' <button type="button" class="warn set" data-ns="{html.escape(ns)}" '
+                f'data-app="{html.escape(label)}" title="adjust requests and limits">&#8660;</button>'
+            )
         rel = _release_for(ns, label, rels)
         off = bool(rel) and rels.get((ns, rel)) == "uninstalled"
         if not rel:
@@ -831,6 +1308,15 @@ def index():
                 f'action="/app/{html.escape(ns)}/{html.escape(rel)}/{verb}">'
                 f'<button title="{tip}">{icon}</button></form>'
             )
+        # Restart sits to the right of stop; a stopped app has nothing to roll.
+        restart = '<div class="act"></div>' if off else (
+            f'<form class="act restart" method="post" action="/app/{html.escape(ns)}/restart">'
+            f'<button title="restart (roll every workload in {html.escape(ns)})">&#8635;</button></form>'
+        )
+        images = (
+            f'<div class="act images"><button type="button" class="imgs" data-ns="{html.escape(ns)}" '
+            f'data-app="{html.escape(label)}" title="workloads and images">&#9776;</button></div>'
+        )
         is_system = group == "system" if group else label in SYSTEM
         (system_items if is_system else items).append(
             f'<li class="{"off" if off else ""}"><div class="app">'
@@ -839,10 +1325,10 @@ def index():
             f'<div class="stats">'
             f'<div class="stat"><b{cpu_heat}>{cpu}</b><span>CPU</span></div>'
             f'<div class="stat"><b{mem_heat}>{mem}</b><span>Memory</span></div>'
-            f'<div class="stat"><b>{disk}</b><span>Disk Capacity</span></div>'
-            f'<div class="stat"><b>&mdash;</b><span>Disk Throughput</span></div>'
-            f'<div class="stat"><b>&mdash;</b><span>Disk vIOPS</span></div>'
-            f"</div>{act}</li>"
+            f'<div class="stat"><b>{disk}</b><span>Disk Cap</span></div>'
+            f'<div class="stat"><b>&mdash;</b><span>Disk Tput</span></div>'
+            f'<div class="stat"><b>&mdash;</b><span>Disk IOPS</span></div>'
+            f"</div>{act}{restart}{images}</li>"
         )
     nodes_html = _node_rows_html(d["nodes"])
     by_ip = {}
@@ -873,6 +1359,9 @@ def index():
         nodes=nodes_html,
         hosts=html.escape(hosts),
         me=html.escape(me),
+        self_ns=html.escape(self_namespace()),
+        rl_css=RL_CSS + IMG_CSS,
+        rl_html=RL_HTML + IMG_HTML,
     )
 
 
@@ -882,6 +1371,111 @@ def api_nodes():
     the app (not a public path), so the browser's session cookie carries in."""
     response.content_type = "text/html; charset=utf-8"
     return _node_rows_html(nodes_snapshot())
+
+
+@app.route("/api/app/<ns>/resources")
+def api_app_resources(ns):
+    """Current usage, scale and request/limit values for the popup's sliders."""
+    if ns not in app_namespaces():
+        raise HTTPError(404, "no such app\n")
+    return app_resources(ns)
+
+
+@app.route("/app/<ns>/resources", method="POST")
+def app_resources_set(ns):
+    """Save the popup: write the app's LimitRange (default request and limit for
+    containers that set none) and, if asked, roll its workloads to apply it."""
+    if ns not in app_namespaces():
+        raise HTTPError(404, "no such app\n")
+    cur = app_resources(ns)
+    try:
+        val = {k: int(request.forms.get(k, "")) for k in
+               ("cpu_request", "cpu_limit", "mem_request", "mem_limit")}
+    except ValueError:
+        raise HTTPError(400, "requests and limits must be whole millicores / Mi\n")
+    for key, name in (("cpu", "cpu"), ("mem", "memory")):
+        r, l = val[f"{key}_request"], val[f"{key}_limit"]
+        if not 0 < r <= l <= cur[key]["top"]:
+            raise HTTPError(400, f"{name}: need 0 < request <= limit <= the largest node\n")
+        if l < cur[key]["floor"]:
+            raise HTTPError(400, f"{name}: a container here already requests more than that limit\n")
+    body = {
+        "apiVersion": "v1", "kind": "LimitRange",
+        "metadata": {"name": LIMITRANGE, "namespace": ns,
+                     "labels": {"app.kubernetes.io/managed-by": "aviary-frontend"}},
+        "spec": {"limits": [{
+            "type": "Container",
+            "defaultRequest": {"cpu": f"{val['cpu_request']}m", "memory": f"{val['mem_request']}Mi"},
+            "default": {"cpu": f"{val['cpu_limit']}m", "memory": f"{val['mem_limit']}Mi"},
+        }]},
+    }
+    v1 = client.CoreV1Api()
+    try:
+        v1.replace_namespaced_limit_range(LIMITRANGE, ns, body)
+    except client.exceptions.ApiException as e:
+        if e.status != 404:
+            raise
+        v1.create_namespaced_limit_range(ns, body)
+    if request.forms.get("restart"):
+        restart_workloads(ns)
+    _bump()
+    redirect("/")
+
+
+@app.route("/api/app/<ns>/images")
+def api_app_images(ns):
+    """Workloads and their images, for the image menu."""
+    if ns not in image_namespaces():
+        raise HTTPError(404, "no such app\n")
+    response.content_type = "application/json"
+    return json.dumps(app_images(ns))
+
+
+@app.route("/app/<ns>/image", method="POST")
+def app_image_set(ns):
+    """Retag one container of one workload (like kubectl set image). Only a
+    mesh-registry image, and only to a tag the menu offered. For a
+    helm-installed app the next helm upgrade puts the chart's tag back."""
+    if ns not in image_namespaces():
+        raise HTTPError(404, "no such app\n")
+    kind, name = request.forms.get("kind", ""), request.forms.get("name", "")
+    cname, tag = request.forms.get("container", ""), request.forms.get("tag", "")
+    if kind not in _WORKLOAD_KINDS:
+        raise HTTPError(400, "unknown workload kind\n")
+    _, read, patch = _workload_api(kind)
+    try:
+        w = read(name, ns)
+    except client.exceptions.ApiException as e:
+        raise HTTPError(404 if e.status == 404 else 502, f"{kind} {name}: {e.reason}\n")
+    for i, c in enumerate(w.spec.template.spec.containers):
+        if c.name == cname:
+            break
+    else:
+        raise HTTPError(404, f"no container {cname} in {kind} {name}\n")
+    mesh = _mesh_image(c.image)
+    if not mesh:
+        raise HTTPError(400, f"only {IMAGE_REGISTRY} images can be retagged here\n")
+    if tag not in image_tags(mesh[0]):
+        raise HTTPError(400, f"{tag!r} is not an offered tag for {mesh[0]}\n")
+    base = f"/spec/template/spec/containers/{i}"
+    # JSON patch, guarded by a test on the container name so a concurrent
+    # reorder cannot retag the wrong container.
+    patch(name, ns, [
+        {"op": "test", "path": f"{base}/name", "value": cname},
+        {"op": "replace", "path": f"{base}/image", "value": f"{IMAGE_REGISTRY}/{mesh[0]}:{tag}"},
+    ])
+    _bump()
+    redirect("/")
+
+
+@app.route("/app/<ns>/restart", method="POST")
+def app_restart(ns):
+    """Restart an app: roll every workload in its namespace."""
+    if ns not in app_namespaces():
+        raise HTTPError(404, "no such app\n")
+    restart_workloads(ns)
+    _bump()
+    redirect("/")
 
 
 @app.route("/app/<ns>/<rel>/uninstall", method="POST")

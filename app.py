@@ -2054,8 +2054,23 @@ def _trust_context():
     return _trust["ctx"]
 
 
+_FAILED = (
+    "\n\nThis lookup FAILED and returned no data. Do not answer from memory and do not invent "
+    "names or numbers. Correct the request and try again -- for a list, drop the selector and "
+    "read the plain table (e.g. /api/v1/nodes shows every node with its STATUS) -- or say "
+    "plainly that you could not find out."
+)
+
+
 def _chat_tool(name, args):
-    """Run one tool call. (note for the reader, result for the model)."""
+    """Run one tool call. (note for the reader, result for the model). A
+    failure is spelled out for the model: left as a bare error line, it has
+    been seen to carry on and make an answer up."""
+    note, result = _chat_tool_run(name, args)
+    return note, result + _FAILED if result.startswith("error:") else result
+
+
+def _chat_tool_run(name, args):
     if isinstance(args, str):
         try:
             args = json.loads(args or "{}")

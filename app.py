@@ -1062,49 +1062,85 @@ IMG_HTML = """
 </script>
 """
 
-# --- Splash: the logo bird leaves its cage, once per browser session. Pure CSS
-# animation over an inline SVG drawn on the same grid as aviary.png (one unit =
-# one square). The inline script right after the markup drops it before first
+# --- Splash: the bird leaves its cage, once per browser session. Pure CSS
+# animation over an inline SVG in the style of aviary.png (domed cage, songbird):
+# the cage draws itself, the door swings, the bird hops and climbs out to the
+# upper left. The inline script right after the markup drops it before first
 # paint when it has already played or the visitor prefers reduced motion; a
 # click or key skips it. Passed into PAGE as values, so no doubled braces here.
 SPLASH_CSS = """
- #splash { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center;
-           overflow: hidden; cursor: pointer; background: inherit; background-color: #fbfbf8;
-           animation: splash-out .5s ease-in 2.2s forwards; }
- #splash svg { width: min(80vw, 62vh, 520px); overflow: visible; fill: none; stroke: #222; stroke-width: 2px;
+ #splash { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; align-items: center;
+           justify-content: center; overflow: hidden; cursor: pointer; background: inherit; background-color: #fbfbf8;
+           animation: splash-out .5s ease-in 3s forwards; }
+ #splash svg { width: min(80vw, 58vh, 500px); overflow: visible; fill: none; stroke: #222;
                stroke-linecap: round; stroke-linejoin: round; }
- #splash svg * { vector-effect: non-scaling-stroke; }
- #splash .cage { stroke: #1a4d8f; }
- #splash .door { transform-origin: 22px 22.5px; animation: splash-door .5s ease-in-out .35s forwards; }
- #splash .bird { transform: translate(13.875px, 18.25px) scale(.25);
-                 animation: splash-fly 1.7s cubic-bezier(.4, 0, .8, .6) .8s forwards; }
- #splash .wing { transform-origin: 13px 18px; animation: splash-flap .2s ease-in-out .8s infinite alternate; }
- #splash .thick { stroke-width: 4px; }
+ #splash .cage { stroke-width: .32px; stroke-linecap: butt; }
+ #splash .cage path { stroke-dasharray: 1 1.1; stroke-dashoffset: 1; animation: splash-draw .6s ease-in-out 0s forwards; }
+ #splash .cage path:nth-of-type(2) { animation-delay: .1s; }
+ #splash .cage path:nth-of-type(3) { animation-delay: .2s; }
+ #splash .cage path:nth-of-type(4) { animation-delay: .3s; }
+ #splash .cage path:nth-of-type(5) { animation-delay: .4s; }
+ #splash .cage .door path { animation-delay: .45s; }
+ #splash .cage .perch { stroke-width: .2px; }
+ #splash .door { transform-origin: 23.33px 22.5px; animation: splash-door .45s cubic-bezier(.5, 0, .3, 1.3) 1.05s forwards; }
+ #splash .bird { stroke-width: 3px; fill: #fbfbf8; opacity: 0; animation: splash-in .3s ease-out .6s forwards; }
+ #splash .bird path { vector-effect: non-scaling-stroke; }
+ #splash .bird .eye { fill: #222; stroke: none; }
+ #splash .bird .legs { fill: none; animation: splash-legs .25s ease-in 1.7s forwards; }
+ #splash .fx { animation: splash-x 1.5s cubic-bezier(.55, 0, .9, .55) 1.5s forwards; }
+ #splash .fy { animation: splash-y 1.5s linear 1.5s forwards; }
+ #splash .grow { transform: scale(.6); animation: splash-grow 1.5s ease-in 1.5s forwards; }
+ #splash .wing { transform-origin: 5.2px 3.9px; animation: splash-flap .16s ease-in-out 1.62s infinite alternate; }
+ #splash .feather { stroke-width: 2px; vector-effect: non-scaling-stroke; opacity: 0;
+                    animation: splash-feather 1.3s ease-in-out 1.75s forwards; }
+ #splash .name { font-size: clamp(30px, 7vh, 56px); font-weight: bold; letter-spacing: -1px; margin-top: .3em;
+                 opacity: 0; animation: splash-name .6s ease-out .5s forwards; }
+ @keyframes splash-draw { to { stroke-dashoffset: 0; } }
+ @keyframes splash-in { to { opacity: 1; } }
+ @keyframes splash-legs { to { opacity: 0; } }
  @keyframes splash-door { to { transform: scaleX(-.7); } }
- @keyframes splash-fly {
-   0%   { transform: translate(13.875px, 18.25px) scale(.25); }
-   22%  { transform: translate(6px, 16.5px) scale(.3); }
-   55%  { transform: translate(-9px, 7px) scale(.45); }
-   100% { transform: translate(-75px, -34px) scale(.8); } }
- @keyframes splash-flap { from { transform: rotate(12deg); } to { transform: rotate(-22deg); } }
+ @keyframes splash-x { to { transform: translateX(-90px); } }
+ @keyframes splash-y {
+   0%   { transform: translateY(0); animation-timing-function: ease-out; }
+   9%   { transform: translateY(-1.3px); animation-timing-function: ease-in; }
+   18%  { transform: translateY(0); animation-timing-function: ease-out; }
+   30%  { transform: translateY(.6px); animation-timing-function: cubic-bezier(.4, 0, .8, .6); }
+   100% { transform: translateY(-40px); } }
+ @keyframes splash-grow {
+   0%   { transform: scale(.6); }
+   30%  { transform: scale(.68) rotate(-6deg); }
+   100% { transform: scale(1.7) rotate(16deg); } }
+ @keyframes splash-flap { from { transform: rotate(18deg); } to { transform: rotate(-75deg) scaleX(1.1); } }
+ @keyframes splash-feather {
+   0%   { opacity: 0; transform: translate(17px, 23px) rotate(-20deg); }
+   15%  { opacity: 1; }
+   40%  { transform: translate(15.4px, 25px) rotate(35deg); }
+   70%  { opacity: 1; transform: translate(16.8px, 27px) rotate(-25deg); }
+   100% { opacity: 0; transform: translate(15.8px, 28.4px) rotate(10deg); } }
+ @keyframes splash-name { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
  @keyframes splash-out { to { opacity: 0; visibility: hidden; } }
 """
 
 SPLASH_HTML = """<div id="splash" aria-hidden="true">
-<svg viewBox="0 0 40 34">
+<svg viewBox="4 2 32 29">
  <g class="cage">
-  <path d="M10 25.5H30"/>
-  <path d="M20 7V5M19 4l1-1 1 1-1 1z"/>
-  <path d="M10 30V12L15 7H25L30 12V30M10 12H30M9 30H31V32H9z"/>
-  <path d="M14 8V30M22 7V30M26 8V30M18 7V17M18 28V30"/>
-  <g class="door"><path d="M14 17H22V28H14zM18 17V28"/></g>
+  <path pathLength="1" d="M8.4 27.6a11.6 2.3 0 1 0 23.2 0a11.6 2.3 0 1 0-23.2 0M10 27a10 1.4 0 1 0 20 0a10 1.4 0 1 0-20 0"/>
+  <path pathLength="1" d="M10 16.6V27M13.33 16.6V28.04M16.67 16.6V28.32M23.33 16.6V28.32M26.67 16.6V28.04M30 16.6V27M20 16.6V18.5M20 26.5V28.4"/>
+  <path pathLength="1" d="M10.3 15.4H29.7a.6 .6 0 0 1 0 1.2H10.3a.6 .6 0 0 1 0-1.2z"/>
+  <path pathLength="1" d="M20 6V15.4M20 6A10 10 0 0 0 10 15.4M20 6A6.67 10 0 0 0 13.33 15.4M20 6A3.33 10 0 0 0 16.67 15.4M20 6A3.33 10 0 0 1 23.33 15.4M20 6A6.67 10 0 0 1 26.67 15.4M20 6A10 10 0 0 1 30 15.4"/>
+  <path pathLength="1" d="M20 6a1.25 1.25 0 1 1 .01 0"/>
+  <path pathLength="1" class="perch" d="M10 24.9H30"/>
+  <g class="door"><path pathLength="1" d="M23.33 18.5H17.4a.7 .7 0 0 0-.7 .7V25.8a.7 .7 0 0 0 .7 .7H23.33M20 18.5V26.5"/></g>
  </g>
- <g class="bird">
-  <path d="M16 15V9L13 6H8L5 9H11M8 16L5 19V22L11 28H17L28 17M11 7H12M25 18L27 16"/>
-  <path class="thick" d="M11 9V13L8 16"/>
-  <path class="wing" d="M13 18L21 10V11H22V12H23V13H24V14H25V15H26L18 23"/>
- </g>
+ <path class="feather" d="M-.8 .3Q0 -.5 .8 -.3"/>
+ <g class="fx"><g class="fy"><g transform="translate(20 22.2)"><g class="grow"><g class="bird" transform="translate(-6 -4.5)">
+  <path class="legs" d="M5.2 7.2V8.8M4.5 8.8H5.9M6.8 7.1V8.8M6.1 8.8H7.5"/>
+  <path d="M1.6 3.4L.3 2.9L1.5 2.1C1.8 .6 4.2 .1 5.2 1.5C5.8 2.4 6.6 3 8 3.4L12 3.6L9.6 5.2C8.6 7.2 5.4 8 3.6 6.8C2.2 5.9 1.6 4.6 1.6 3.4z"/>
+  <path class="eye" d="M3.1 2.05a.26 .26 0 1 0 .01 0z"/>
+  <path class="wing" d="M5 3.7C6.6 3.1 8.8 3.9 10.6 4.5C8.9 5.9 6.2 6.1 5 3.7zM6.6 4.3L9 4.7"/>
+ </g></g></g></g></g>
 </svg>
+<div class="name">Aviary</div>
 </div>
 <script>
 (function () {
@@ -1115,7 +1151,7 @@ SPLASH_HTML = """<div id="splash" aria-hidden="true">
   s.addEventListener('click', done);
   s.addEventListener('animationend', function (e) { if (e.animationName === 'splash-out') done(); });
   document.addEventListener('keydown', done, { once: true });
-  setTimeout(done, 3500);
+  setTimeout(done, 4500);
 })();
 </script>
 """

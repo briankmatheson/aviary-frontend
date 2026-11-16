@@ -87,6 +87,10 @@ BLURBS = {
     "jitsi": "Video conferencing",
 }
 
+# Platform services (aviary-deploy's system/ stack), listed under their own
+# heading below the apps. Keyed like BLURBS; anything not listed is an app.
+SYSTEM = {"gitea", "grafana", "harbor", "headlamp", "mattermost", "velero", "postgres-ui", "minio"}
+
 try:
     config.load_incluster_config()
 except config.ConfigException:
@@ -654,6 +658,7 @@ PAGE = """<!doctype html>
 {fortune}
 <h2>Apps</h2>
 <ul class="menu">{menu}</ul>
+{system}
 <h2>Cluster</h2>
 <table id="nodes"><thead><tr><th>Node</th><th>Role</th><th>Ready</th><th>Kubelet</th><th>CPU</th><th>Memory</th><th>Disk Capacity</th><th>Disk Throughput</th><th>Disk vIOPS</th></tr></thead><tbody id="noderows">{nodes}</tbody></table>
 <h2>/etc/hosts</h2>
@@ -787,7 +792,7 @@ def logout():
 def index():
     d = snapshot()
     me = os.environ.get("HOSTNAME", "")
-    items = []
+    items, system_items = [], []
     m = d["metrics"]
     rels = d["releases"]
     for host, ns, svc, port, ip in d["routes"]:
@@ -821,7 +826,7 @@ def index():
                 f'action="/app/{html.escape(ns)}/{html.escape(rel)}/{verb}">'
                 f'<button title="{tip}">{icon}</button></form>'
             )
-        items.append(
+        (system_items if label in SYSTEM else items).append(
             f'<li class="{"off" if off else ""}"><div class="app">'
             f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>{warn}'
             f"<small>{html.escape(blurb)}</small></div>"
@@ -855,6 +860,10 @@ def index():
         auth_nav=auth_nav,
         fortune=fort_html,
         menu="".join(items),
+        system=(
+            f'<h2>System</h2>\n<ul class="menu">{"".join(system_items)}</ul>'
+            if system_items else ""
+        ),
         nodes=nodes_html,
         hosts=html.escape(hosts),
         me=html.escape(me),

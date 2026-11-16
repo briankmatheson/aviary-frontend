@@ -1006,8 +1006,8 @@ RL_CSS = """
 # Exposure switches at the right-hand end of each app row. System rows carry
 # empty .sw spacers so the columns to their left still line up with the apps'.
 SW_CSS = """
- ul.menu li .sw { flex: 0 0 auto; margin: 0; width: 44px; text-align: center; }
- ul.menu li .sw + .sw { margin-left: -8px; }
+ ul.menu li .sw { flex: 0 0 auto; margin: 0; width: 56px; text-align: center; }
+ ul.menu li .sw + .sw { margin-left: -12px; }
  ul.menu li .sw button { display: block; position: relative; width: 36px; height: 20px; margin: 0 auto 3px;
    padding: 0; border: 0; border-radius: 10px; background: #c9ced6; cursor: pointer; transition: background .15s; }
  ul.menu li .sw button::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;

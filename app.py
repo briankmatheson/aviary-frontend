@@ -1092,7 +1092,7 @@ RL_CSS = """
 # empty .sw spacers so the columns to their left still line up with the apps'.
 SW_CSS = """
  ul.menu li .sw { flex: 0 0 auto; margin: 0; width: 56px; text-align: center; }
- ul.menu li .sw + .sw { margin-left: -12px; }
+ ul.menu li .sw + .sw { margin-left: -8px; }
  ul.menu li .sw button { display: block; position: relative; width: 36px; height: 20px; margin: 0 auto 3px;
    padding: 0; border: 0; border-radius: 10px; background: #c9ced6; cursor: pointer; transition: background .15s; }
  ul.menu li .sw button::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
@@ -2086,10 +2086,11 @@ def _chat_relay(messages, upstream):
     Text is passed on as it arrives, except from the first place a written-out
     tool call could begin: that tail is held until the round ends, then either
     run as the call(s) it is or passed on as the prose it was."""
-    for round_no in range(CHAT_TOOL_ROUNDS + 1):
+    said, plain = False, False   # anything shown yet / tools put away for a retry
+    for round_no in range(CHAT_TOOL_ROUNDS + 2):
         if upstream is None:
             try:
-                upstream = _chat_open(messages, tools=round_no < CHAT_TOOL_ROUNDS)
+                upstream = _chat_open(messages, tools=round_no < CHAT_TOOL_ROUNDS and not plain)
             except Exception as e:
                 yield f"\n(the model stopped answering: {e})\n".encode()
                 return
@@ -2114,7 +2115,11 @@ def _chat_relay(messages, upstream):
                         if at:
                             hold = min(at)
                         # Keep one character back: a mark may straddle two pieces.
+                        # And nothing goes out before the first word: a reply
+                        # of bare brackets ("{}") is an empty call, not prose.
                         upto = hold if hold is not None else len(text) - 1
+                        if not re.search(r"\w", text):
+                            upto = sent
                         if upto > sent:
                             yield text[sent:upto].encode()
                             sent = upto
@@ -2130,12 +2135,23 @@ def _chat_relay(messages, upstream):
             calls = dict(enumerate(_calls_in_text(text[hold:].strip())))
             if calls:
                 text = text[:hold]
-        elif hold is not None and not re.search(r"\w", text[hold:]):
-            text = text[:hold]  # stray brackets beside a real tool call
+        # Brackets and nothing else ("{}"): an empty tool call written as text,
+        # or debris beside a real one. Not something to show.
+        if hold is not None:
+            if not re.search(r"\w", text[hold:]):
+                text = text[:hold]
+        elif not re.search(r"\w", text):
+            text = ""  # (and none of it was sent: nothing goes out before a word)
         if len(text) > sent:
             yield text[sent:].encode()
+        said = said or bool(text.strip())
         if not calls:
-            return
+            if said or plain:
+                return
+            # It produced nothing at all -- typically small talk answered with
+            # an empty call. Ask once more with the tools put away.
+            plain = True
+            continue
         ordered = [dict(c, id=c["id"] or f"call_{round_no}_{i}") for i, c in sorted(calls.items())]
         messages.append({"role": "assistant", "content": text, "tool_calls": [
             {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["args"] or "{}"}}
@@ -2188,7 +2204,10 @@ def _chat_system():
         "kubernetes_get reads this cluster's live state (read-only, no Secrets) and http_get "
         f"fetches pages from this cluster's own network only ({_CHAT_NETS_TEXT}: the apps "
         "listed below); you have no internet access. Use them rather than guess, and say what "
-        "you found; do not use them for small talk or questions you can answer outright. If a "
+        "you found. For small talk or anything you can answer outright, just reply in a few "
+        "friendly words: no tools, and no remarks about tools or function calls. Do not "
+        "announce what you are about to look up or lay out a plan: make the lookup, then give "
+        "the answer in a sentence or two. If a "
         "lookup fails, correct it and try again before giving up. Call one tool at a time and "
         "wait for its result before the next. Lists "
         "end with their row count: use it rather than counting by eye. You cannot change "

@@ -88,7 +88,10 @@ BLURBS = {
 }
 
 # Platform plumbing rather than things people open to do work, listed under
-# their own heading below the apps. Keyed like BLURBS; unlisted means app.
+# their own heading below the apps. aviary-deploy says which is which with an
+# aviary/group label ("apps" or "system") on each HTTPRoute; this list is only
+# the fallback for a route without one. Keyed like BLURBS; unlisted means app.
+GROUP_LABEL = "aviary/group"
 SYSTEM = {"grafana", "headlamp", "velero", "postgres-ui", "minio"}
 
 try:
@@ -108,7 +111,8 @@ _nlock = threading.Lock()
 
 
 def routes():
-    """[(host, namespace, service, port, gateway_ip)] for every HTTPRoute."""
+    """[(host, namespace, service, port, gateway_ip, group)] for every
+    HTTPRoute; group is its aviary/group label ("" if unlabelled)."""
     custom = client.CustomObjectsApi()
     out = []
     gws = {}
@@ -125,6 +129,7 @@ def routes():
         if not hosts:
             continue
         ns = r["metadata"]["namespace"]
+        group = (r["metadata"].get("labels") or {}).get(GROUP_LABEL, "")
         ip = ""
         for p in spec.get("parentRefs", []):
             ip = gws.get((p.get("namespace", ns), p.get("name")), "") or ip
@@ -132,7 +137,7 @@ def routes():
             # The https-redirect route has filters and no backends; skip it.
             for b in rule.get("backendRefs", []):
                 for h in hosts:
-                    out.append((h, b.get("namespace", ns), b.get("name", ""), b.get("port", ""), ip))
+                    out.append((h, b.get("namespace", ns), b.get("name", ""), b.get("port", ""), ip, group))
     # one line per host
     seen, uniq = set(), []
     for row in sorted(out):
@@ -795,7 +800,7 @@ def index():
     items, system_items = [], []
     m = d["metrics"]
     rels = d["releases"]
-    for host, ns, svc, port, ip in d["routes"]:
+    for host, ns, svc, port, ip, group in d["routes"]:
         if svc == "aviary-frontend":
             continue  # that's us
         label = host.split(".", 1)[0]
@@ -826,7 +831,8 @@ def index():
                 f'action="/app/{html.escape(ns)}/{html.escape(rel)}/{verb}">'
                 f'<button title="{tip}">{icon}</button></form>'
             )
-        (system_items if label in SYSTEM else items).append(
+        is_system = group == "system" if group else label in SYSTEM
+        (system_items if is_system else items).append(
             f'<li class="{"off" if off else ""}"><div class="app">'
             f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>{warn}'
             f"<small>{html.escape(blurb)}</small></div>"
@@ -840,7 +846,7 @@ def index():
         )
     nodes_html = _node_rows_html(d["nodes"])
     by_ip = {}
-    for host, _, _, _, ip in d["routes"]:
+    for host, _, _, _, ip, _ in d["routes"]:
         by_ip.setdefault(ip or "<gateway-ip>", []).append(host)
     hosts = "\n".join(f"{ip:<16} {' '.join(hs)}" for ip, hs in sorted(by_ip.items()))
     fort = _fortune()

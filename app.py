@@ -1062,6 +1062,64 @@ IMG_HTML = """
 </script>
 """
 
+# --- Splash: the logo bird leaves its cage, once per browser session. Pure CSS
+# animation over an inline SVG drawn on the same grid as aviary.png (one unit =
+# one square). The inline script right after the markup drops it before first
+# paint when it has already played or the visitor prefers reduced motion; a
+# click or key skips it. Passed into PAGE as values, so no doubled braces here.
+SPLASH_CSS = """
+ #splash { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center;
+           overflow: hidden; cursor: pointer; background: inherit; background-color: #fbfbf8;
+           animation: splash-out .5s ease-in 2.2s forwards; }
+ #splash svg { width: min(80vw, 62vh, 520px); overflow: visible; fill: none; stroke: #222; stroke-width: 2px;
+               stroke-linecap: round; stroke-linejoin: round; }
+ #splash svg * { vector-effect: non-scaling-stroke; }
+ #splash .cage { stroke: #1a4d8f; }
+ #splash .door { transform-origin: 22px 22.5px; animation: splash-door .5s ease-in-out .35s forwards; }
+ #splash .bird { transform: translate(13.875px, 18.25px) scale(.25);
+                 animation: splash-fly 1.7s cubic-bezier(.4, 0, .8, .6) .8s forwards; }
+ #splash .wing { transform-origin: 13px 18px; animation: splash-flap .2s ease-in-out .8s infinite alternate; }
+ #splash .thick { stroke-width: 4px; }
+ @keyframes splash-door { to { transform: scaleX(-.7); } }
+ @keyframes splash-fly {
+   0%   { transform: translate(13.875px, 18.25px) scale(.25); }
+   22%  { transform: translate(6px, 16.5px) scale(.3); }
+   55%  { transform: translate(-9px, 7px) scale(.45); }
+   100% { transform: translate(-75px, -34px) scale(.8); } }
+ @keyframes splash-flap { from { transform: rotate(12deg); } to { transform: rotate(-22deg); } }
+ @keyframes splash-out { to { opacity: 0; visibility: hidden; } }
+"""
+
+SPLASH_HTML = """<div id="splash" aria-hidden="true">
+<svg viewBox="0 0 40 34">
+ <g class="cage">
+  <path d="M10 25.5H30"/>
+  <path d="M20 7V5M19 4l1-1 1 1-1 1z"/>
+  <path d="M10 30V12L15 7H25L30 12V30M10 12H30M9 30H31V32H9z"/>
+  <path d="M14 8V30M22 7V30M26 8V30M18 7V17M18 28V30"/>
+  <g class="door"><path d="M14 17H22V28H14zM18 17V28"/></g>
+ </g>
+ <g class="bird">
+  <path d="M16 15V9L13 6H8L5 9H11M8 16L5 19V22L11 28H17L28 17M11 7H12M25 18L27 16"/>
+  <path class="thick" d="M11 9V13L8 16"/>
+  <path class="wing" d="M13 18L21 10V11H22V12H23V13H24V14H25V15H26L18 23"/>
+ </g>
+</svg>
+</div>
+<script>
+(function () {
+  var s = document.getElementById('splash'), seen = false;
+  function done() { if (s.parentNode) s.parentNode.removeChild(s); }
+  try { seen = !!sessionStorage.getItem('splash'); sessionStorage.setItem('splash', '1'); } catch (e) {}
+  if (seen || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) return done();
+  s.addEventListener('click', done);
+  s.addEventListener('animationend', function (e) { if (e.animationName === 'splash-out') done(); });
+  document.addEventListener('keydown', done, { once: true });
+  setTimeout(done, 3500);
+})();
+</script>
+"""
+
 PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Aviary</title>
 <link rel="icon" href="/favicon.ico">
@@ -1119,7 +1177,7 @@ PAGE = """<!doctype html>
  .heat {{ font-weight: 600; font-variant-numeric: tabular-nums; }}
  .ok {{ color: #1b7f3b; }} .bad {{ color: #b00020; }}
  footer {{ margin-top: 48px; color: #888; font-size: 13px; }}
-{rl_css}</style></head><body><main>
+{rl_css}{splash_css}</style></head><body>{splash_html}<main>
 <div class="hdr">
 <nav><a href="/{ca_name}" download="{ca_name}" title="Cluster CA: trust this to stop the browser warnings">{ca_name}</a></nav>
 <div class="corner"><div class="host">{host}</div>{auth_nav}</div>
@@ -1365,6 +1423,8 @@ def index():
         me=html.escape(me),
         rl_css=RL_CSS + IMG_CSS,
         rl_html=RL_HTML + IMG_HTML,
+        splash_css=SPLASH_CSS,
+        splash_html=SPLASH_HTML,
     )
 
 

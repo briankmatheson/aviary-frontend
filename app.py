@@ -524,7 +524,7 @@ PAGE = """<!doctype html>
 <h2>Apps</h2>
 <ul class="menu">{menu}</ul>
 <h2>Cluster</h2>
-<table id="nodes"><thead><tr><th>Node</th><th>Role</th><th>Ready</th><th>Kubelet</th><th>CPU</th><th>Memory</th><th>Disk tput</th><th>IOPS</th></tr></thead><tbody id="noderows">{nodes}</tbody></table>
+<table id="nodes"><thead><tr><th>Node</th><th>Role</th><th>Ready</th><th>Kubelet</th><th>CPU</th><th>Memory</th><th>Disk Throughput</th><th>Disk vIOPS</th></tr></thead><tbody id="noderows">{nodes}</tbody></table>
 <h2>/etc/hosts</h2>
 <p>If your resolver does not know these names:</p>
 <pre>{hosts}</pre>

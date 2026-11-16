@@ -1621,7 +1621,9 @@ PAGE = """<!doctype html>
  ul.menu li.off .app a {{ color: #888; }}
  ul.menu li .app small {{ display: block; font-size: 13px; color: #666; }}
  ul.menu li .stats {{ display: flex; gap: 12px; flex: 0 0 auto; }}
- ul.menu li .stat {{ text-align: right; min-width: 62px; }}
+ /* A fixed width, not a minimum: the heading line and the rows must agree, and
+    a heading ("Disk Tput") is wider than most values. */
+ ul.menu li .stat {{ text-align: right; flex: 0 0 76px; width: 76px; }}
  ul.menu li .stat b {{ display: block; font-size: 15px; color: #333; font-weight: 600; font-variant-numeric: tabular-nums; }}
  ul.menu li .stat span {{ font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: .5px; white-space: nowrap; }}
  ul.menu li .act {{ flex: 0 0 auto; margin: 0; width: 34px; text-align: center; }}

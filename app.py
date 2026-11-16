@@ -103,6 +103,7 @@ BLURBS = {
     "postgres-ui": "Postgres operator UI",
     "rustpad": "Shared text editor",
     "mail": "Mail (Axigen WebMail)",
+    "jitsi": "Video meetings (Jitsi Meet)",
     "mattermost": "Team chat",
     "bash": "In-cluster shell",
     "velero": "Backup and restore",

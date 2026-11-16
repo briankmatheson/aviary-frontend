@@ -13,6 +13,8 @@ clone:
 steps:
 - name: kaniko
   image: harness/kaniko
+  environment:
+    DRONE_OUTPUT: /tmp/drone-output.env
   settings:
     registry: registry.mesh.bmath.nyc
     repo: registry.mesh.bmath.nyc/aviary-frontend

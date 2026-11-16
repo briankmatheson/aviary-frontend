@@ -16,3 +16,11 @@ steps:
   settings:
     repo: registry.mesh.bmath.nyc/aviary-frontend
     tags: latest
+settings:
+  registry: registry.mesh.bmath.nyc
+  repo: registry.mesh.bmath.nyc/aviary-frontend
+  tags: latest
+  username: mesh
+  password:
+    from_secret: mesh_registry_password
+  skip_tls_verify: true

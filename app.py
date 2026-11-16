@@ -1022,47 +1022,38 @@ SW_CSS = """
 CHAT_CSS = """
  .top { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
  .top-l { flex: 1 1 320px; min-width: 0; }
- #chat { flex: 0 1 400px; min-width: 280px; height: 270px; margin-top: 6px; display: flex; flex-direction: column;
-   background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.15); overflow: hidden;
-   font: 14px/1.45 system-ui, sans-serif; }
- #chat .chat-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #1a4d8f; color: #fff; }
- #chat .chat-head b { flex: 1 1 auto; font-size: 14px; }
- #chat .chat-head small { font-weight: 400; opacity: .75; margin-left: 6px; }
- #chat .chat-head button { border: 0; background: none; color: #fff; cursor: pointer; font-size: 13px; opacity: .8; padding: 2px 6px; }
- #chat .chat-head button:hover { opacity: 1; }
- #chat .chat-log { flex: 1 1 auto; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px;
-   background: #f5f6f8; }
- #chat .chat-log .hint { margin: auto; color: #999; font-size: 13px; text-align: center; }
- #chat .msg { max-width: 88%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
- #chat .msg.user { align-self: flex-end; background: #1a4d8f; color: #fff; border-bottom-right-radius: 4px; }
- #chat .msg.assistant { align-self: flex-start; background: #fff; color: #222; border-bottom-left-radius: 4px;
-   box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+ /* The fortune box's twin: same paper, same type, its rule on the right. */
+ #chat { flex: 0 1 400px; min-width: 280px; height: 270px; margin-top: 8px; display: flex; flex-direction: column;
+   background: rgba(255,255,255,.85); border-right: 3px solid #4682b4; font: italic 13px/1.4 monospace; color: #555; }
+ #chat .chat-log { flex: 1 1 auto; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+ #chat .chat-log .hint { margin: auto; color: #999; text-align: center; }
+ #chat .msg { white-space: pre-wrap; overflow-wrap: anywhere; }
+ #chat .msg.user { color: #1a4d8f; font-style: normal; }
+ #chat .msg.user::before { content: "> "; }
  #chat .msg.pending:empty::after { content: "\\2026"; color: #999; }
- #chat .msg.err { background: #ffecec; color: #b00020; }
- #chat form { display: flex; gap: 8px; padding: 8px; margin: 0; border-top: 1px solid #e3e6eb; background: #fff; }
- #chat textarea { flex: 1 1 auto; min-width: 0; resize: none; height: 36px; padding: 7px 10px; border: 1px solid #d8dde5;
-   border-radius: 8px; font: inherit; }
- #chat textarea:focus { outline: 2px solid #9db8dc; border-color: #9db8dc; }
- #chat form button { flex: 0 0 auto; padding: 0 14px; border: 0; border-radius: 8px; background: #1a4d8f; color: #fff;
-   font: inherit; cursor: pointer; }
- #chat form button.stop { background: #b00020; }
+ #chat .msg.err { color: #b00020; }
+ #chat hr { flex: 0 0 auto; border: 0; border-top: 1px solid #c5d0db; margin: 0 14px; }
+ #chat form { flex: 0 0 auto; display: flex; margin: 0; padding: 8px 14px 10px; }
+ #chat input { flex: 1 1 auto; min-width: 0; padding: 0; border: 0; outline: 0; background: none;
+   font: inherit; font-style: normal; color: #222; }
+ #chat input::placeholder { color: #999; font-style: italic; }
 """
 
 CHAT_HTML = """
-<section id="chat" aria-label="Chat">
- <div class="chat-head"><b>Chat<small>__MODEL__</small></b>
-  <button type="button" class="clear" title="forget this conversation">clear</button></div>
+<section id="chat" aria-label="Chat with __MODEL__">
  <div class="chat-log" aria-live="polite"></div>
- <form><textarea placeholder="Ask something&hellip;" aria-label="Message"></textarea><button>Send</button></form>
+ <hr>
+ <form><input type="text" placeholder="ask __MODEL__&hellip;" aria-label="Message" autocomplete="off"></form>
 </section>
 <script>
 // Chat window. The conversation lives in this tab (sessionStorage) and is sent
 // whole with each turn to /api/chat, which streams the reply back as plain text.
+// Enter sends; while a reply is streaming, Enter or Escape stops it. There is
+// no chrome: typing /clear forgets the conversation.
 (function () {
   var box = document.getElementById('chat');
   if (!box || !window.fetch) return;
-  var log = box.querySelector('.chat-log'), form = box.querySelector('form');
-  var ta = form.querySelector('textarea'), go = form.querySelector('button');
+  var log = box.querySelector('.chat-log'), form = box.querySelector('form'), inp = form.querySelector('input');
   var msgs = [], busy = null;
   function store(k, v) { try { sessionStorage.setItem(k, v); } catch (e) {} }
   function load(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
@@ -1082,16 +1073,12 @@ CHAT_HTML = """
     }
     msgs.forEach(function (m) { bubble(m.role, m.content); });
   }
-  function done() { busy = null; go.textContent = 'Send'; go.classList.remove('stop'); store('chat', JSON.stringify(msgs)); }
-  function send() {
-    var text = ta.value.trim();
-    if (!text) return;
-    ta.value = '';
+  function send(text) {
     msgs.push({ role: 'user', content: text });
     bubble('user', text);
     var out = bubble('assistant', ''), acc = '';
     out.classList.add('pending');
-    busy = new AbortController(); go.textContent = 'Stop'; go.classList.add('stop');
+    busy = new AbortController();
     fetch('/api/chat', { method: 'POST', credentials: 'same-origin', signal: busy.signal,
                          headers: { 'Content-Type': 'application/json' },
                          body: JSON.stringify({ messages: msgs }) })
@@ -1114,14 +1101,19 @@ CHAT_HTML = """
         out.classList.remove('pending');
         // A turn with no reply is dropped, so the next one still alternates.
         if (acc) msgs.push({ role: 'assistant', content: acc }); else msgs.pop();
-        done();
+        busy = null; store('chat', JSON.stringify(msgs));
       });
   }
-  form.onsubmit = function (e) { e.preventDefault(); if (busy) busy.abort(); else send(); };
-  ta.onkeydown = function (e) {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!busy) send(); }
+  form.onsubmit = function (e) {
+    e.preventDefault();
+    if (busy) { busy.abort(); return; }
+    var text = inp.value.trim();
+    if (!text) return;
+    inp.value = '';
+    if (text === '/clear') { msgs = []; store('chat', '[]'); redraw(); return; }
+    send(text);
   };
-  box.querySelector('.clear').onclick = function () { if (busy) busy.abort(); msgs = []; store('chat', '[]'); redraw(); };
+  inp.onkeydown = function (e) { if (e.key === 'Escape' && busy) busy.abort(); };
   redraw();
 })();
 </script>

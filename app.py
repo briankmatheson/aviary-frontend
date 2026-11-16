@@ -2074,6 +2074,10 @@ def _chat_open(messages, tools=True):
 
 # Where a tool call written out as text can begin (see _calls_in_text).
 _CALL_MARKS = ('{"', "[{", '["')
+# What Llama 3 says instead of an answer when it is offered tools and wants
+# none ("No function call is needed for this response."). Not a reply.
+_NO_CALL = re.compile(r"\s*no (function|tool)s?( calls?)?( (is|are|was|were))? (needed|required|necessary)\b[^\n]{0,60}$", re.I)
+_LEAD = 48   # characters held at the start of a round until we can tell
 
 
 def _chat_relay(messages, upstream):
@@ -2118,8 +2122,10 @@ def _chat_relay(messages, upstream):
                         # And nothing goes out before the first word: a reply
                         # of bare brackets ("{}") is an empty call, not prose.
                         upto = hold if hold is not None else len(text) - 1
-                        if not re.search(r"\w", text):
+                        if not re.search(r"\w", text) or (sent == 0 and len(text) < _LEAD):
                             upto = sent
+                        elif sent == 0 and _NO_CALL.match(text.strip()):
+                            hold = upto = 0
                         if upto > sent:
                             yield text[sent:upto].encode()
                             sent = upto
@@ -2142,6 +2148,8 @@ def _chat_relay(messages, upstream):
                 text = text[:hold]
         elif not re.search(r"\w", text):
             text = ""  # (and none of it was sent: nothing goes out before a word)
+        if sent == 0 and not calls and _NO_CALL.fullmatch(text.strip()):
+            text = ""  # the no-tools-needed line: ask again below, tools put away
         if len(text) > sent:
             yield text[sent:].encode()
         said = said or bool(text.strip())

@@ -206,6 +206,21 @@ def routes(gws):
     return uniq
 
 
+def gpu_count():
+    """GPUs the cluster can schedule onto right now: nvidia.com/gpu allocatable
+    on Ready nodes. The chat window's model runs on one; with none it is
+    greyed out. 0 on any error."""
+    try:
+        total = 0
+        for n in client.CoreV1Api().list_node().items:
+            ready = next((c.status for c in n.status.conditions or [] if c.type == "Ready"), "")
+            if ready == "True":
+                total += int(_q((n.status.allocatable or {}).get("nvidia.com/gpu", "0")))
+        return total
+    except Exception:
+        return 0
+
+
 def _is_system(host, svc, group):
     """Whether a route is listed under System (this page always is)."""
     if svc == "aviary-frontend":
@@ -930,6 +945,7 @@ def snapshot():
                 "nodes": nodes(),
                 "metrics": metrics(),
                 "releases": releases(),
+                "gpus": gpu_count() if CHAT_ENABLED else 0,
             }
             _cache["at"] = time.time()
         return _cache["data"]
@@ -1037,13 +1053,15 @@ CHAT_CSS = """
  #chat input { flex: 1 1 auto; min-width: 0; padding: 0; border: 0; outline: 0; background: none;
    font: inherit; font-style: normal; color: #222; }
  #chat input::placeholder { color: #999; font-style: italic; }
+ #chat.off { opacity: .55; filter: grayscale(1); }
+ #chat.off input { cursor: not-allowed; }
 """
 
 CHAT_HTML = """
-<section id="chat" aria-label="Chat with __MODEL__">
+<section id="chat" class="__CLASS__" aria-label="Chat with __MODEL__" data-hint="__HINT__">
  <div class="chat-log" aria-live="polite"></div>
  <hr>
- <form><input type="text" placeholder="ask __MODEL__&hellip;" aria-label="Message" autocomplete="off"></form>
+ <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off"__DISABLED__></form>
 </section>
 <script>
 // Chat window. The conversation lives in this tab (sessionStorage) and is sent
@@ -1069,7 +1087,7 @@ CHAT_HTML = """
     log.textContent = '';
     if (!msgs.length) {
       var h = document.createElement('div'); h.className = 'hint';
-      h.textContent = 'Running on the GPU in this cluster.'; log.appendChild(h);
+      h.textContent = box.dataset.hint; log.appendChild(h);
     }
     msgs.forEach(function (m) { bubble(m.role, m.content); });
   }
@@ -1107,6 +1125,7 @@ CHAT_HTML = """
   form.onsubmit = function (e) {
     e.preventDefault();
     if (busy) { busy.abort(); return; }
+    if (inp.disabled) return;
     var text = inp.value.trim();
     if (!text) return;
     inp.value = '';
@@ -1721,7 +1740,7 @@ def index():
         me=html.escape(me),
         rl_css=RL_CSS + IMG_CSS + SW_CSS + (CHAT_CSS if CHAT_ENABLED else ""),
         rl_html=RL_HTML + IMG_HTML,
-        chat=CHAT_HTML.replace("__MODEL__", html.escape(CHAT_MODEL)) if CHAT_ENABLED else "",
+        chat=_chat_html(d.get("gpus", 0)) if CHAT_ENABLED else "",
         splash_css=SPLASH_CSS,
         splash_html=SPLASH_HTML,
     )
@@ -1733,6 +1752,23 @@ def api_nodes():
     the app (not a public path), so the browser's session cookie carries in."""
     response.content_type = "text/html; charset=utf-8"
     return _node_rows_html(nodes_snapshot())
+
+
+def _chat_html(gpus):
+    """The chat window, live when the cluster has a GPU for the model to run
+    on, greyed out (input disabled) when it has none."""
+    on = gpus > 0
+    model = html.escape(CHAT_MODEL)
+    page = CHAT_HTML
+    for key, val in (
+        ("__CLASS__", "" if on else "off"),
+        ("__HINT__", "Running on the GPU in this cluster." if on else "No GPU in the cluster."),
+        ("__PLACEHOLDER__", f"ask {model}&hellip;" if on else "no GPU in the cluster"),
+        ("__DISABLED__", "" if on else " disabled"),
+        ("__MODEL__", model),
+    ):
+        page = page.replace(key, val)
+    return page
 
 
 def _chat_system():
@@ -1769,6 +1805,8 @@ def api_chat():
     are plain text too: the window shows them in place of the reply."""
     if not CHAT_ENABLED:
         return _chat_error(404, "chat is not configured\n")
+    if not snapshot().get("gpus"):
+        return _chat_error(503, "there is no GPU in the cluster for the model to run on\n")
     try:
         msgs = (request.json or {}).get("messages")
     except Exception:

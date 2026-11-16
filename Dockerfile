@@ -14,4 +14,6 @@ COPY app.py aviary004.png favicon.ico /app/
 ENV PORT=8086
 EXPOSE 8086
 USER nobody
-CMD ["sh", "-c", "exec gunicorn -b 0.0.0.0:${PORT} --workers 2 --threads 4 app:app"]
+# One worker: the chat room's transcript lives in this process's memory, and
+# every viewer must poll the same one. Threads carry the concurrency.
+CMD ["sh", "-c", "exec gunicorn -b 0.0.0.0:${PORT} --workers 1 --threads 16 app:app"]

@@ -25,9 +25,19 @@ entries have none. Override the names with `GATEWAY_NAMESPACE`,
 `PRIVATE_GATEWAY`, `PUBLIC_GATEWAY`.
 
 With `CHAT_URL` set to an OpenAI-compatible API (the cluster's Ollama:
-`http://ollama.aviary-ollama.svc:11434/v1`) the page gets a chat window at the
-top right (beside the fortune), talking to `CHAT_MODEL` (default `llama3`). The browser
-only talks to this app; `/api/chat` relays to the model and streams the reply.
+`http://ollama.aviary-ollama.svc:11434/v1`) the page gets a chat room beside
+the fortune, IRC style: everyone on the page sees the same lines, each with
+its author's name in front (`<bmath> ...`), and the model (`CHAT_MODEL`,
+default `llama3`, speaking as `CHAT_NICK`) answers what is said. `/clear`
+empties the room, `/stop` or Escape cuts a reply short. The transcript is kept
+in memory, so the app runs as a single gunicorn worker and a restart empties
+the room. With no GPU in the cluster the room is greyed out.
+
+The model can look things up while it answers. `kubernetes_get` reads the
+cluster's API with a token for the `CHAT_SERVICE_ACCOUNT` ServiceAccount
+(default `aviary-chat`, which aviary-deploy binds read-only, without Secrets),
+never with this app's own rights. `http_get` fetches http/https URLs from
+inside the cluster. Each lookup shows as a line in the reply.
 
 Env: `CLUSTER_ISSUER` (default `ca-issuer`), `BASE_DOMAIN` (shown in the
 header), `PORT` (8086).

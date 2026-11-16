@@ -8,17 +8,15 @@ trigger:
     - main
   event:
     - push
-    
-clone:
-  skip_verify: true 
 
-  
+clone:
+  skip_verify: true
+
 steps:
-- name: kaniko  
+- name: kaniko
   image: harness/kaniko
-  settings:  
-    username: robot$aviary+drone 
-    registry: harbor.local:443
-    repo: harbor.local:443/aviary/aviary-frontend
+  settings:
+    registry: registry.mesh.bmath.nyc
+    repo: registry.mesh.bmath.nyc/aviary-frontend
     tags: latest
     skip_tls_verify: true

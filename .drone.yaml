@@ -14,13 +14,10 @@ steps:
 - name: kaniko
   image: harness/kaniko
   settings:
+    registry: registry.mesh.bmath.nyc
     repo: registry.mesh.bmath.nyc/aviary-frontend
     tags: latest
-settings:
-  registry: registry.mesh.bmath.nyc
-  repo: registry.mesh.bmath.nyc/aviary-frontend
-  tags: latest
-  username: mesh
-  password:
-    from_secret: mesh_registry_password
-  skip_tls_verify: true
+    username: mesh
+    password:
+      from_secret: mesh_registry_password
+    skip_tls_verify: true

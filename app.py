@@ -503,8 +503,9 @@ def app_resources(ns):
 
 
 def app_namespaces():
-    """Namespaces the menu lists as apps: the only ones the popup may change."""
-    return {ns for _, ns, svc, _, _, _ in snapshot()["routes"] if svc != "aviary-frontend"}
+    """Namespaces the menu lists (this page's own included): the only ones the
+    controls may change."""
+    return {ns for _, ns, _, _, _, _ in snapshot()["routes"]}
 
 
 def restart_workloads(ns):
@@ -842,12 +843,12 @@ def _node_rows_html(rows):
 
 
 RL_CSS = """
- ul.menu li .app .warn { display: inline-block; width: 22px; height: 22px; padding: 0; margin-left: 6px;
+ ul.menu li .act .warn { display: inline-block; width: 22px; height: 22px; padding: 0;
    border: 0; border-radius: 50%; background: #d11a2a; color: #e5e5e5; font: 700 15px/22px system-ui, sans-serif;
-   text-align: center; vertical-align: 3px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
- ul.menu li .app .warn:hover { background: #a80f1d; }
- ul.menu li .app .warn.set { background: #c9ced6; color: #555; font-size: 13px; }
- ul.menu li .app .warn.set:hover { background: #b3bac4; }
+   text-align: center; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+ ul.menu li .act .warn:hover { background: #a80f1d; }
+ ul.menu li .act .warn.set { background: #c9ced6; color: #555; font-size: 13px; }
+ ul.menu li .act .warn.set:hover { background: #b3bac4; }
  dialog#rl { border: 0; border-radius: 10px; padding: 22px 26px; width: min(560px, 92vw);
    box-shadow: 0 12px 40px rgba(0,0,0,.3); font: 15px/1.4 system-ui, sans-serif; color: #222; }
  dialog#rl::backdrop { background: rgba(20,30,45,.45); }
@@ -1106,9 +1107,7 @@ PAGE = """<!doctype html>
                            width: 30px; height: 30px; font-size: 14px; line-height: 1; color: #777; }}
  ul.menu li .act.stop button:hover {{ background: #ffecec; border-color: #e0a0a0; color: #b00020; }}
  ul.menu li .act.start button:hover {{ background: #e8f5e9; border-color: #a0cfa5; color: #1b7f3b; }}
- ul.menu li .act.restart, ul.menu li .act.images {{ margin-left: -12px; }}
- footer button.imgs {{ cursor: pointer; margin-left: 8px; padding: 2px 8px; border: 1px solid #d8dde5; border-radius: 6px;
-                      background: rgba(255,255,255,.85); color: #777; font-size: 12px; }}
+ ul.menu li .act + .act {{ margin-left: -12px; }}
  ul.menu li .act.restart button {{ font-size: 17px; }}
  ul.menu li .act.restart button:hover {{ background: #e8f0fb; border-color: #9db8dc; color: #1a4d8f; }}
  table {{ border-collapse: collapse; background: rgba(255,255,255,.85); width: 100%; font-size: 14px; }}
@@ -1135,7 +1134,7 @@ PAGE = """<!doctype html>
 <h2>/etc/hosts</h2>
 <p>If your resolver does not know these names:</p>
 <pre>{hosts}</pre>
-<footer>Served by {me} <button type="button" class="imgs" data-ns="{self_ns}" data-app="aviary" title="this page's own image">image &#9776;</button></footer>
+<footer>Served by {me}</footer>
 </main>
 {rl_html}
 <script>
@@ -1268,10 +1267,9 @@ def index():
     m = d["metrics"]
     rels = d["releases"]
     for host, ns, svc, port, ip, group in d["routes"]:
-        if svc == "aviary-frontend":
-            continue  # that's us
+        me_too = svc == "aviary-frontend"  # that's us: listed first under System
         label = host.split(".", 1)[0]
-        blurb = BLURBS.get(label, f"{ns}/{svc}:{port}")
+        blurb = "This page" if me_too else BLURBS.get(label, f"{ns}/{svc}:{port}")
         mem = _hbytes(m["mem"][ns]) if ns in m["mem"] else "-"
         cpu = _hcpu(m["cpu"][ns]) if ns in m["cpu"] else "-"
         disk = _hbytes(m["disk"][ns]) if ns in m["disk"] else "-"
@@ -1283,20 +1281,22 @@ def index():
         if gaps:
             tip = "containers without: " + ", ".join(f"{k} ({n})" for k, n in sorted(gaps.items()))
             warn = (
-                f' <button type="button" class="warn" data-ns="{html.escape(ns)}" '
+                f'<button type="button" class="warn" data-ns="{html.escape(ns)}" '
                 f'data-app="{html.escape(label)}" title="{html.escape(tip)} '
                 f'&#10;click to set requests and limits">!</button>'
             )
         elif ns in m["tuned"]:
             # Nothing missing any more, but keep a way back to the sliders.
             warn = (
-                f' <button type="button" class="warn set" data-ns="{html.escape(ns)}" '
+                f'<button type="button" class="warn set" data-ns="{html.escape(ns)}" '
                 f'data-app="{html.escape(label)}" title="adjust requests and limits">&#8660;</button>'
             )
         rel = _release_for(ns, label, rels)
         off = bool(rel) and rels.get((ns, rel)) == "uninstalled"
-        if not rel:
-            act = '<div class="act"></div>'  # not a helm release: no button
+        if not rel or me_too:
+            # Not a helm release: no button. Nor for this page, which could not
+            # be started again from a page that is no longer there.
+            act = '<div class="act"></div>'
         else:
             verb, cls, icon, tip = (
                 ("install", "start", "&#9654;", "reinstall (re-attaches the same volumes)")
@@ -1317,10 +1317,10 @@ def index():
             f'<div class="act images"><button type="button" class="imgs" data-ns="{html.escape(ns)}" '
             f'data-app="{html.escape(label)}" title="workloads and images">&#9776;</button></div>'
         )
-        is_system = group == "system" if group else label in SYSTEM
-        (system_items if is_system else items).append(
+        is_system = me_too or (group == "system" if group else label in SYSTEM)
+        row = (
             f'<li class="{"off" if off else ""}"><div class="app">'
-            f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>{warn}'
+            f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>'
             f"<small>{html.escape(blurb)}</small></div>"
             f'<div class="stats">'
             f'<div class="stat"><b{cpu_heat}>{cpu}</b><span>CPU</span></div>'
@@ -1328,8 +1328,12 @@ def index():
             f'<div class="stat"><b>{disk}</b><span>Disk Cap</span></div>'
             f'<div class="stat"><b>&mdash;</b><span>Disk Tput</span></div>'
             f'<div class="stat"><b>&mdash;</b><span>Disk IOPS</span></div>'
-            f"</div>{act}{restart}{images}</li>"
+            f'</div><div class="act">{warn}</div>{act}{restart}{images}</li>'
         )
+        if me_too:
+            system_items.insert(0, row)
+        else:
+            (system_items if is_system else items).append(row)
     nodes_html = _node_rows_html(d["nodes"])
     by_ip = {}
     for host, _, _, _, ip, _ in d["routes"]:
@@ -1359,7 +1363,6 @@ def index():
         nodes=nodes_html,
         hosts=html.escape(hosts),
         me=html.escape(me),
-        self_ns=html.escape(self_namespace()),
         rl_css=RL_CSS + IMG_CSS,
         rl_html=RL_HTML + IMG_HTML,
     )

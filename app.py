@@ -94,6 +94,13 @@ except config.ConfigException:
 _cache = {"at": 0.0, "data": None}
 _lock = threading.Lock()
 
+# A separate, short-lived cache for just the node table. The page polls
+# /api/nodes several times a second (far more often than the 15s page
+# snapshot), so this bounds how hard that hits the API without letting the
+# table feel stale.
+_ncache = {"at": 0.0, "data": None}
+_nlock = threading.Lock()
+
 
 def routes():
     """[(host, namespace, service, port, gateway_ip)] for every HTTPRoute."""
@@ -430,6 +437,18 @@ def snapshot():
         return _cache["data"]
 
 
+def nodes_snapshot():
+    """Node rows on a short (1s) cache, independent of the 15s page snapshot, so
+    the live /api/nodes poll stays cheap however fast the browser asks (the
+    underlying sources -- metrics-server, Prometheus rates -- only move every
+    ~15-30s anyway, so 1s is already finer than the data changes)."""
+    with _nlock:
+        if time.time() - _ncache["at"] > 1:
+            _ncache["data"] = nodes()
+            _ncache["at"] = time.time()
+        return _ncache["data"]
+
+
 def _node_rows_html(rows):
     """The <tbody> for the node table; also served on its own at /api/nodes so
     the page can refresh it in place without a full reload."""
@@ -513,19 +532,22 @@ PAGE = """<!doctype html>
 </main>
 <script>
 // Keep the node table live without reloading the page: pull the <tbody> from
-// /api/nodes every 10s (carrying the session cookie) and swap it in. Silent on
-// error so a transient blip just leaves the last-good rows on screen.
+// /api/nodes (carrying the session cookie) and swap it in. Self-scheduling --
+// the next fetch is queued 200ms after the previous one *finishes*, so a slow
+// response can't let requests pile up. Silent on error so a transient blip just
+// leaves the last-good rows on screen.
 // (Braces are doubled because this page is rendered with str.format().)
 (function () {{
   var tb = document.getElementById('noderows');
   if (!tb) return;
-  function refresh() {{
+  function tick() {{
     fetch('/api/nodes', {{ credentials: 'same-origin' }})
       .then(function (r) {{ return r.ok ? r.text() : Promise.reject(r.status); }})
       .then(function (h) {{ tb.innerHTML = h; }})
-      .catch(function () {{}});
+      .catch(function () {{}})
+      .finally(function () {{ setTimeout(tick, 200); }});
   }}
-  setInterval(refresh, 10000);
+  tick();
 }})();
 </script>
 </body></html>
@@ -705,7 +727,7 @@ def api_nodes():
     """The node table body, for the page's live refresh. Gated like the rest of
     the app (not a public path), so the browser's session cookie carries in."""
     response.content_type = "text/html; charset=utf-8"
-    return _node_rows_html(snapshot()["nodes"])
+    return _node_rows_html(nodes_snapshot())
 
 
 @app.route("/app/<ns>/<rel>/uninstall", method="POST")

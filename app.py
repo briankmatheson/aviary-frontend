@@ -16,6 +16,7 @@ import gzip
 import hmac
 import html
 import json
+import math
 import os
 import re
 import secrets
@@ -148,6 +149,8 @@ def nodes():
     except Exception:
         pass  # metrics-server optional
     io = node_disk_io()
+    peak_bps, peak_iops = node_disk_peak(io)
+    rootfs = node_root_fs()
     rows = []
     for n in v1.list_node().items:
         ready = next((c.status for c in n.status.conditions if c.type == "Ready"), "Unknown")
@@ -156,15 +159,22 @@ def nodes():
         ) or "worker"
         u = usage.get(n.metadata.name)
         cpu = mem = "-"
+        fcpu = fmem = None
         if u:
             cpu = "%d%%" % (100 * _q(u["cpu"]) / _q(n.status.allocatable["cpu"]))
             mem = "%d%%" % (100 * _q(u["memory"]) / _q(n.status.allocatable["memory"]))
+            # Heat is against the node's real capacity, not allocatable.
+            fcpu = _frac(_q(u["cpu"]), _q(n.status.capacity["cpu"]))
+            fmem = _frac(_q(u["memory"]), _q(n.status.capacity["memory"]))
         bps, iops = io.get(n.metadata.name, (None, None))
         tput = f"{_hbytes(bps)}/s" if bps is not None else "-"
         iops_s = _hiops(iops) if iops is not None else "-"
+        used, size = rootfs.get(n.metadata.name, (None, None))
+        dcap = f"{_hbytes(used)} / {_hbytes(size)}" if used is not None and size else "-"
         rows.append((
             n.metadata.name, roles, ready, n.status.node_info.kubelet_version,
-            cpu, mem, tput, iops_s,
+            cpu, mem, dcap, tput, iops_s,
+            fcpu, fmem, _frac(used, size), _logfrac(bps, peak_bps), _logfrac(iops, peak_iops),
         ))
     return rows
 
@@ -175,6 +185,37 @@ _SUFFIX = {"n": 1e-9, "u": 1e-6, "m": 1e-3, "": 1, "k": 1e3, "Ki": 2**10, "Mi": 
 def _q(s):
     m = re.fullmatch(r"([0-9.]+)([a-zA-Z]*)", str(s))
     return float(m.group(1)) * _SUFFIX.get(m.group(2), 1)
+
+
+def _frac(value, top):
+    """value/top clamped to 0..1, or None when there is no scale to judge by."""
+    if value is None or not top or top <= 0:
+        return None
+    return min(1.0, max(0.0, value / top))
+
+
+# Disk rates span orders of magnitude (an idle node does a few KiB/s, a busy one
+# hundreds of MiB/s), so on a linear scale everything but the peak would read as
+# "min". Spread the bottom three decades below the peak across the spectrum.
+_DISK_DECADES = 3
+
+
+def _logfrac(value, top):
+    if value is None or not top or top <= 0:
+        return None
+    if value <= 0:
+        return 0.0
+    return min(1.0, max(0.0, 1 + math.log10(value / top) / _DISK_DECADES))
+
+
+def _heat(frac, title=""):
+    """Inline attributes colouring a value by where it sits between min and max:
+    a continuous sweep of the spectrum, blue (0) through green (0.5) to red (1).
+    Empty when there is no scale (frac is None), leaving the default colour."""
+    if frac is None:
+        return ""
+    t = f' title="{html.escape(title)}"' if title else ""
+    return f' class="heat" style="color:hsl({240 * (1 - frac):.0f},90%,38%)"{t}'
 
 
 def _hbytes(n):
@@ -226,7 +267,48 @@ def metrics():
                 disk[ns] = disk.get(ns, 0) + _q(cap)
     except Exception:
         pass
-    return {"cpu": cpu, "mem": mem, "disk": disk}
+    cpu_max, mem_max, unset = app_limits()
+    return {"cpu": cpu, "mem": mem, "disk": disk,
+            "cpu_max": cpu_max, "mem_max": mem_max, "unset": unset}
+
+
+def app_limits():
+    """({ns: cores}, {ns: bytes}, {ns: {what: count}}): the most each
+    namespace's running pods may use, and how many of its containers leave a
+    request or limit unset (e.g. {"memory limit": 3}). The maximum is the sum of their containers' limits; a container without a
+    limit is bounded only by the node it runs on, so it contributes that node's
+    capacity (counted once per node per namespace, however many unlimited
+    containers share it)."""
+    v1 = client.CoreV1Api()
+    cpu, mem, unset = {}, {}, {}
+    try:
+        cap = {
+            n.metadata.name: (_q(n.status.capacity["cpu"]), _q(n.status.capacity["memory"]))
+            for n in v1.list_node().items
+        }
+        open_cpu, open_mem = set(), set()  # (ns, node) with an unlimited container
+        for p in v1.list_pod_for_all_namespaces(field_selector="status.phase=Running").items:
+            ns, node = p.metadata.namespace, p.spec.node_name
+            for c in p.spec.containers:
+                lim = (c.resources.limits if c.resources else None) or {}
+                req = (c.resources.requests if c.resources else None) or {}
+                for kind, have in (("request", req), ("limit", lim)):
+                    for res in ("cpu", "memory"):
+                        # A limit with no request defaults the request to it.
+                        if res not in have and not (kind == "request" and res in lim):
+                            gaps = unset.setdefault(ns, {})
+                            gaps[f"{res} {kind}"] = gaps.get(f"{res} {kind}", 0) + 1
+                for res, total, unbounded, idx in (
+                    ("cpu", cpu, open_cpu, 0), ("memory", mem, open_mem, 1)
+                ):
+                    if res in lim:
+                        total[ns] = total.get(ns, 0) + _q(lim[res])
+                    elif node in cap and (ns, node) not in unbounded:
+                        unbounded.add((ns, node))
+                        total[ns] = total.get(ns, 0) + cap[node][idx]
+    except Exception:
+        pass  # no limits known: the stats just stay uncoloured
+    return cpu, mem, unset
 
 
 def _prom(expr):
@@ -270,6 +352,51 @@ def node_disk_io():
     for name in (set(tput) | set(iops)) - {""}:
         out[name] = (tput.get(name), iops.get(name))
     return out
+
+
+def node_root_fs():
+    """{nodename: (used_bytes, size_bytes)} for each node's own root filesystem
+    (the local disk; ABE volumes are separate block devices and not counted)."""
+    if not PROMETHEUS_URL:
+        return {}
+    join = " * on(instance) group_left(nodename) node_uname_info"
+    size = _prom(f'max by (nodename) (node_filesystem_size_bytes{{mountpoint="/"}}{join})')
+    avail = _prom(f'max by (nodename) (node_filesystem_avail_bytes{{mountpoint="/"}}{join})')
+    return {n: (size[n] - avail[n], size[n]) for n in size if n and n in avail}
+
+
+_pcache = {"at": 0.0, "data": (None, None)}
+_plock = threading.Lock()
+
+
+def node_disk_peak(io):
+    """(bytes_per_s, iops): the top of the disk scales. Disks advertise no
+    throughput capacity, so the ceiling is the busiest any node has actually
+    been over the last 24h (and never less than what is on screen right now).
+    The 24h subquery is cached for a minute; the peak moves slowly."""
+    if not PROMETHEUS_URL:
+        return None, None
+    with _plock:
+        if time.time() - _pcache["at"] > 60:
+            dev = 'device!~"dm-.*"'
+            join = " * on(instance) group_left(nodename) node_uname_info"
+            tput = _prom(
+                f"max_over_time((sum by (nodename) ((rate(node_disk_read_bytes_total{{{dev}}}[5m])"
+                f"+rate(node_disk_written_bytes_total{{{dev}}}[5m])){join}))[24h:5m])"
+            )
+            iops = _prom(
+                f"max_over_time((sum by (nodename) ((rate(node_disk_reads_completed_total{{{dev}}}[5m])"
+                f"+rate(node_disk_writes_completed_total{{{dev}}}[5m])){join}))[24h:5m])"
+            )
+            _pcache["data"] = (max(tput.values(), default=None), max(iops.values(), default=None))
+            _pcache["at"] = time.time()
+        peak_bps, peak_iops = _pcache["data"]
+    now_bps = [b for b, _ in io.values() if b is not None]
+    now_iops = [i for _, i in io.values() if i is not None]
+    return (
+        max([peak_bps or 0, *now_bps]) or None,
+        max([peak_iops or 0, *now_iops]) or None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -455,9 +582,11 @@ def _node_rows_html(rows):
     return "".join(
         f"<tr><td>{html.escape(n)}</td><td>{html.escape(r)}</td>"
         f'<td class="{"ok" if ready == "True" else "bad"}">{html.escape(ready)}</td>'
-        f"<td>{html.escape(v)}</td><td>{cpu}</td><td>{mem}</td>"
-        f"<td>{html.escape(tput)}</td><td>{html.escape(iops)}</td></tr>"
-        for n, r, ready, v, cpu, mem, tput, iops in rows
+        f"<td>{html.escape(v)}</td>"
+        f"<td{_heat(fcpu)}>{cpu}</td><td{_heat(fmem)}>{mem}</td>"
+        f"<td{_heat(fdcap)}>{html.escape(dcap)}</td>"
+        f"<td{_heat(ftput)}>{html.escape(tput)}</td><td{_heat(fiops)}>{html.escape(iops)}</td></tr>"
+        for n, r, ready, v, cpu, mem, dcap, tput, iops, fcpu, fmem, fdcap, ftput, fiops in rows
     )
 
 
@@ -496,11 +625,12 @@ PAGE = """<!doctype html>
  ul.menu li .app {{ flex: 1 1 auto; min-width: 0; }}
  ul.menu li .app a {{ text-decoration: none; color: #1a4d8f; font-size: 20px; }}
  ul.menu li.off .app a {{ color: #888; }}
+ ul.menu li .app .warn {{ color: #c2410c; font-size: 20px; font-weight: 700; cursor: help; }}
  ul.menu li .app small {{ display: block; font-size: 13px; color: #666; }}
  ul.menu li .stats {{ display: flex; gap: 12px; flex: 0 0 auto; }}
  ul.menu li .stat {{ text-align: right; min-width: 62px; }}
  ul.menu li .stat b {{ display: block; font-size: 15px; color: #333; font-weight: 600; font-variant-numeric: tabular-nums; }}
- ul.menu li .stat span {{ font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: .5px; }}
+ ul.menu li .stat span {{ font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: .5px; white-space: nowrap; }}
  ul.menu li .act {{ flex: 0 0 auto; margin: 0; width: 34px; text-align: center; }}
  ul.menu li .act button {{ cursor: pointer; border: 1px solid #d8dde5; border-radius: 6px; background: #fff;
                            width: 30px; height: 30px; font-size: 14px; line-height: 1; color: #777; }}
@@ -512,6 +642,7 @@ PAGE = """<!doctype html>
  pre {{ background: rgba(255,255,255,.85); padding: 12px; overflow-x: auto; font-size: 13px; }}
  pre.fortune {{ border-left: 3px solid #4682b4; padding: 10px 14px; margin: 8px 0 0;
                 font-size: 13px; color: #555; font-style: italic; white-space: pre-wrap; }}
+ .heat {{ font-weight: 600; font-variant-numeric: tabular-nums; }}
  .ok {{ color: #1b7f3b; }} .bad {{ color: #b00020; }}
  footer {{ margin-top: 48px; color: #888; font-size: 13px; }}
 </style></head><body><main>
@@ -524,7 +655,7 @@ PAGE = """<!doctype html>
 <h2>Apps</h2>
 <ul class="menu">{menu}</ul>
 <h2>Cluster</h2>
-<table id="nodes"><thead><tr><th>Node</th><th>Role</th><th>Ready</th><th>Kubelet</th><th>CPU</th><th>Memory</th><th>Disk Throughput</th><th>Disk vIOPS</th></tr></thead><tbody id="noderows">{nodes}</tbody></table>
+<table id="nodes"><thead><tr><th>Node</th><th>Role</th><th>Ready</th><th>Kubelet</th><th>CPU</th><th>Memory</th><th>Disk Capacity</th><th>Disk Throughput</th><th>Disk vIOPS</th></tr></thead><tbody id="noderows">{nodes}</tbody></table>
 <h2>/etc/hosts</h2>
 <p>If your resolver does not know these names:</p>
 <pre>{hosts}</pre>
@@ -667,6 +798,14 @@ def index():
         mem = _hbytes(m["mem"][ns]) if ns in m["mem"] else "-"
         cpu = _hcpu(m["cpu"][ns]) if ns in m["cpu"] else "-"
         disk = _hbytes(m["disk"][ns]) if ns in m["disk"] else "-"
+        mem_top, cpu_top = m["mem_max"].get(ns), m["cpu_max"].get(ns)
+        mem_heat = _heat(_frac(m["mem"].get(ns), mem_top), f"of {_hbytes(mem_top)} max" if mem_top else "")
+        cpu_heat = _heat(_frac(m["cpu"].get(ns), cpu_top), f"of {_hcpu(cpu_top)} max" if cpu_top else "")
+        gaps = m["unset"].get(ns)
+        warn = ""
+        if gaps:
+            tip = "containers without: " + ", ".join(f"{k} ({n})" for k, n in sorted(gaps.items()))
+            warn = f' <span class="warn" title="{html.escape(tip)}">!</span>'
         rel = _release_for(ns, label, rels)
         off = bool(rel) and rels.get((ns, rel)) == "uninstalled"
         if not rel:
@@ -684,14 +823,14 @@ def index():
             )
         items.append(
             f'<li class="{"off" if off else ""}"><div class="app">'
-            f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>'
+            f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>{warn}'
             f"<small>{html.escape(blurb)}</small></div>"
             f'<div class="stats">'
-            f'<div class="stat"><b>{mem}</b><span>mem</span></div>'
-            f'<div class="stat"><b>{cpu}</b><span>cpu</span></div>'
-            f'<div class="stat"><b>{disk}</b><span>disk</span></div>'
-            f'<div class="stat"><b>&mdash;</b><span>lat</span></div>'
-            f'<div class="stat"><b>&mdash;</b><span>tput</span></div>'
+            f'<div class="stat"><b{cpu_heat}>{cpu}</b><span>CPU</span></div>'
+            f'<div class="stat"><b{mem_heat}>{mem}</b><span>Memory</span></div>'
+            f'<div class="stat"><b>{disk}</b><span>Disk Capacity</span></div>'
+            f'<div class="stat"><b>&mdash;</b><span>Disk Throughput</span></div>'
+            f'<div class="stat"><b>&mdash;</b><span>Disk vIOPS</span></div>'
             f"</div>{act}</li>"
         )
     nodes_html = _node_rows_html(d["nodes"])

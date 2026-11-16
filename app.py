@@ -1093,7 +1093,7 @@ RL_CSS = """
 SW_CSS = """
  ul.menu li .sw { flex: 0 0 auto; margin: 0; width: 56px; text-align: center; }
  ul.menu li .sw + .sw { margin-left: -8px; }
- ul.menu li .sw button { display: block; position: relative; width: 36px; height: 20px; margin: 0 auto 3px;
+ ul.menu li .sw button { display: block; position: relative; width: 36px; height: 20px; margin: 0 auto;
    padding: 0; border: 0; border-radius: 10px; background: #c9ced6; cursor: pointer; transition: background .15s; }
  ul.menu li .sw button::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
    border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: left .15s; }
@@ -1506,6 +1506,8 @@ PAGE = """<!doctype html>
  ul.menu li {{ display: flex; align-items: center; gap: 18px; padding: 12px 16px; background: rgba(255,255,255,.85);
                border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.08); transition: background .1s; }}
  ul.menu li:hover {{ background: #fffbe6; }}
+ ul.menu li.head, ul.menu li.head:hover {{ background: none; box-shadow: none; padding-top: 0; padding-bottom: 0;
+                                          margin-bottom: -4px; }}
  ul.menu li.off {{ opacity: .55; filter: grayscale(1); }}
  ul.menu li .app {{ flex: 1 1 auto; min-width: 0; }}
  ul.menu li .app a {{ text-decoration: none; color: #1a4d8f; font-size: 20px; }}
@@ -1540,7 +1542,7 @@ PAGE = """<!doctype html>
 <h1>Aviary</h1>
 <div class="top"><div class="top-l">{fortune}</div>{chat}</div>
 <h2>Apps</h2>
-<ul class="menu">{menu}</ul>
+<ul class="menu">{menu_head}{menu}</ul>
 {system}
 <h2>Cluster</h2>
 <table id="nodes"><thead><tr><th>Node</th><th>Role</th><th>Ready</th><th>Kubelet</th><th>CPU</th><th>Memory</th><th>Disk Cap</th><th>Disk Tput</th><th>Disk IOPS</th></tr></thead><tbody id="noderows">{nodes}</tbody></table>
@@ -1672,6 +1674,18 @@ def logout():
     )
 
 
+def _menu_head(shown, switches):
+    """The column headings of a menu list, once, as its first line: built like
+    a row so each heading sits over its column. `shown` is the exposure
+    switches the rows carry; the System list has their columns but no
+    switches, so no headings for them (switches=False)."""
+    stats = "".join(f'<div class="stat"><span>{t}</span></div>'
+                    for t in ("CPU", "Memory", "Disk Cap", "Disk Tput", "Disk IOPS"))
+    sw = "".join(f'<div class="sw"><span>{key if switches else ""}</span></div>' for key, _ in shown)
+    return (f'<li class="head" aria-hidden="true"><div class="app"></div><div class="stats">{stats}</div>'
+            f'<div class="act"></div><div class="act"></div><div class="act"></div><div class="act"></div>{sw}</li>')
+
+
 @app.route("/")
 def index():
     d = snapshot()
@@ -1755,18 +1769,18 @@ def index():
                 f'aria-label="{html.escape(label)} on {key} gateway" '
                 f'title="{"served on" if on else "not on"} {html.escape(where)} &#10;'
                 f'click to {"remove it" if on else "expose it"}"></button>'
-                f"<span>{key}</span></form>"
+                f"</form>"
             )
         row = (
             f'<li class="{"off" if off else ""}"><div class="app">'
             f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>'
             f"<small>{html.escape(blurb)}</small></div>"
             f'<div class="stats">'
-            f'<div class="stat"><b{cpu_heat}>{cpu}</b><span>CPU</span></div>'
-            f'<div class="stat"><b{mem_heat}>{mem}</b><span>Memory</span></div>'
-            f'<div class="stat"><b>{disk}</b><span>Disk Cap</span></div>'
-            f'<div class="stat"><b>&mdash;</b><span>Disk Tput</span></div>'
-            f'<div class="stat"><b>&mdash;</b><span>Disk IOPS</span></div>'
+            f'<div class="stat"><b{cpu_heat}>{cpu}</b></div>'
+            f'<div class="stat"><b{mem_heat}>{mem}</b></div>'
+            f'<div class="stat"><b>{disk}</b></div>'
+            f'<div class="stat"><b>&mdash;</b></div>'
+            f'<div class="stat"><b>&mdash;</b></div>'
             f'</div><div class="act">{warn}</div>{act}{restart}{images}{switches}</li>'
         )
         if me_too:
@@ -1796,8 +1810,9 @@ def index():
         auth_nav=auth_nav,
         fortune=fort_html,
         menu="".join(items),
+        menu_head=_menu_head(shown, True) if items else "",
         system=(
-            f'<h2>System</h2>\n<ul class="menu">{"".join(system_items)}</ul>'
+            f'<h2>System</h2>\n<ul class="menu">{_menu_head(shown, False)}{"".join(system_items)}</ul>'
             if system_items else ""
         ),
         nodes=nodes_html,
@@ -1867,6 +1882,25 @@ def _k8s_table(obj, namespaced_path):
     return f"{table}\n({len(rows)} rows{more})"
 
 
+def _k8s_metrics(obj):
+    """Node or pod metrics as a table, busiest first, in units a reader can use
+    (the API speaks nanocores and Ki, which read as huge numbers)."""
+    rows = []
+    for it in obj.get("items", []):
+        usages = [it["usage"]] if "usage" in it else [c.get("usage", {}) for c in it.get("containers", [])]
+        cpu = sum(_q(u.get("cpu", "0")) for u in usages)
+        mem = sum(_q(u.get("memory", "0")) for u in usages)
+        rows.append((cpu, mem, it["metadata"].get("namespace", ""), it["metadata"]["name"]))
+    rows.sort(reverse=True)
+    with_ns = any(r[2] for r in rows)
+    out = [(["NAMESPACE"] if with_ns else []) + ["NAME", "CPU", "MEMORY"]]
+    for cpu, mem, ns, name in rows:
+        out.append(([ns] if with_ns else []) + [name, f"{cpu * 1000:.0f}m", f"{mem / 2**20:.0f}Mi"])
+    width = [max(len(r[i]) for r in out) for i in range(len(out[0]))]
+    table = "\n".join("  ".join(v.ljust(w) for v, w in zip(r, width)).rstrip() for r in out)
+    return f"{table}\n({len(rows)} rows, busiest first; CPU in millicores: 1000m = one core)"
+
+
 def _strip_noise(o):
     """Drop managedFields and a node's image list: bulk that tells a reader nothing."""
     if isinstance(o, dict):
@@ -1891,7 +1925,8 @@ def chat_kubernetes_get(path, fmt="table"):
     cfg = client.Configuration.get_default_copy()
     ctx = ssl.create_default_context(cafile=cfg.ssl_ca_cert) if cfg.ssl_ca_cert else ssl.create_default_context()
     accept = "application/json"
-    if fmt != "json":
+    metrics = bare.startswith("/apis/metrics.k8s.io/")   # tabulated here, in readable units
+    if fmt != "json" and not metrics:
         accept = "application/json;as=Table;v=v1;g=meta.k8s.io, application/json"
     req = urllib.request.Request(
         cfg.host.rstrip("/") + urllib.parse.quote(path, safe="/?&=%:,.-_~()!*'+"),
@@ -1922,6 +1957,8 @@ def chat_kubernetes_get(path, fmt="table"):
         return _clip(text)
     if obj.get("kind") == "Table":
         return _clip(_k8s_table(obj, "/namespaces/" in bare))
+    if metrics and fmt != "json" and isinstance(obj.get("items"), list):
+        return _clip(_k8s_metrics(obj))
     return _clip(json.dumps(_strip_noise(obj), indent=1))
 
 
@@ -2140,6 +2177,10 @@ def _chat_relay(messages, upstream):
                         text, thought = text.split("</think>", 1)[1], True
                     if thought and sent == 0:
                         text = text.lstrip()  # the blank lines after the block
+                    if sent == 0:
+                        # Some models open with a nick of their own, as the
+                        # lines they read do ("<bmath> ..."). The room adds it.
+                        text = re.sub(r"^\s*<[\w.-]{1,32}>\s*", "", text)
                     if hold is None:
                         at = [i for i in (text.find(m, max(0, sent - 1)) for m in _CALL_MARKS) if i >= 0]
                         if at:

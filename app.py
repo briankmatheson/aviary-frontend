@@ -493,6 +493,109 @@ def _setting(path, default, lo=None, hi=None):
     return v
 
 
+# The System lock. An admin locks the System controls; from then on nobody,
+# admins included, can change anything of System's from this page -- stop,
+# start, restart, scale, images, exposure, deleting a node, the API key --
+# until an admin unlocks it. It is kept in the AviaryConfig's status
+# (status.lock), so it outlasts a restart of this page and is the same for
+# everyone. Locking (and unlocking) first brings the gateway gates' admin
+# team into line with gitea's site administrators (admin_sync), so what is
+# frozen is the current set of admins.
+def system_lock():
+    """{"locked": bool, "by": login, "at": time, "sync": what the sync did}."""
+    lock = ((aviary_config().get("status") or {}).get("lock")) or {}
+    return lock if isinstance(lock, dict) else {}
+
+
+def system_locked():
+    return bool(system_lock().get("locked"))
+
+
+def system_lock_set(locked, who):
+    """Lock or unlock, after syncing the admins. Returns what the sync did
+    (or why it could not); the lock is set either way. Raises if there is no
+    AviaryConfig to keep it in."""
+    if not aviary_config(fresh=True):
+        raise ValueError(f"there is no AviaryConfig named {CONFIG_NAME!r} to keep the lock in")
+    try:
+        did = admin_sync()
+    except Exception as e:
+        did = f"admins not synced: {getattr(e, 'reason', None) or e}"
+    lock = {"locked": bool(locked), "by": who, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "sync": did[:500]}
+    client.CustomObjectsApi().patch_cluster_custom_object_status(*CONFIG_API, CONFIG_NAME, {"status": {"lock": lock}})
+    aviary_config(fresh=True)
+    return did
+
+
+# The gateway's gates in front of the System apps can only see gitea teams
+# (the groups claim of its ID token), not the is_admin flag this page goes
+# by. admin_sync makes the gates' team equal to the site administrators. It
+# runs here, in this page's container, when an admin locks or unlocks; it
+# signs in to gitea's API as its admin account, whose password it reads from
+# the cluster (GITEA_ADMIN_PASSWORD, else the gitea Deployment's own setting).
+GATE_TEAM = os.environ.get("GATE_TEAM", "aviary:admins")
+GITEA_ADMIN_USER = os.environ.get("GITEA_ADMIN_USER", "gitea_admin")
+
+
+def _gitea_admin_password():
+    given = os.environ.get("GITEA_ADMIN_PASSWORD", "")
+    if given:
+        return given
+    parts = (urllib.parse.urlsplit(GITEA_INTERNAL).hostname or "").split(".")
+    if len(parts) < 2:
+        raise ValueError("GITEA_INTERNAL does not name gitea's namespace")
+    ns = parts[1]
+    for d in client.AppsV1Api().list_namespaced_deployment(ns).items:
+        for c in (d.spec.template.spec.init_containers or []) + d.spec.template.spec.containers:
+            for e in c.env or []:
+                if e.name == "GITEA_ADMIN_PASSWORD" and e.value:
+                    return e.value
+    raise ValueError(f"no GITEA_ADMIN_PASSWORD found in {ns}")
+
+
+def _gitea_admin_call(method, path, auth):
+    req = urllib.request.Request(f"{_GITEA_API}/api/v1{path}", method=method,
+                                 headers={"Authorization": "Basic " + auth, "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        body = r.read()
+    return json.loads(body.decode()) if body else None
+
+
+def admin_sync():
+    """Make GATE_TEAM's members exactly gitea's active site administrators.
+    Returns a line saying what changed. Refuses to act if gitea lists no
+    administrators (a failed or empty answer must not empty the team)."""
+    org, team_name = GATE_TEAM.split(":", 1)
+    auth = base64.b64encode(f"{GITEA_ADMIN_USER}:{_gitea_admin_password()}".encode()).decode()
+
+    def pages(path):
+        out, page = [], 1
+        while True:
+            got = _gitea_admin_call("GET", f"{path}{'&' if '?' in path else '?'}limit=50&page={page}", auth) or []
+            out += got
+            if len(got) < 50:
+                return out
+            page += 1
+
+    admins = {u["login"] for u in pages("/admin/users")
+              if u.get("is_admin") and u.get("active") and not u.get("prohibit_login")}
+    if not admins:
+        raise ValueError("gitea lists no site administrators")
+    team = next((t for t in pages(f"/orgs/{urllib.parse.quote(org)}/teams") if t.get("name") == team_name), None)
+    if not team:
+        raise ValueError(f"no team {team_name} in gitea organisation {org}")
+    members = {u["login"] for u in pages(f"/teams/{team['id']}/members")}
+    for login in sorted(admins - members):
+        _gitea_admin_call("PUT", f"/teams/{team['id']}/members/{urllib.parse.quote(login)}", auth)
+    for login in sorted(members - admins):
+        _gitea_admin_call("DELETE", f"/teams/{team['id']}/members/{urllib.parse.quote(login)}", auth)
+    if admins == members:
+        return f"{GATE_TEAM} already matched the site administrators ({', '.join(sorted(admins))})"
+    return (f"{GATE_TEAM} set to the site administrators ({', '.join(sorted(admins))})"
+            + (f"; added {', '.join(sorted(admins - members))}" if admins - members else "")
+            + (f"; removed {', '.join(sorted(members - admins))}" if members - admins else ""))
+
+
 def session_seconds():
     return _setting("session.minutes", SESSION_SECONDS // 60, 1, 1440) * 60
 
@@ -2443,6 +2546,9 @@ DARK_CSS = """
  html[data-theme=dark] th { color: #6f9aa1; }
  html[data-theme=dark] pre.fortune { border-left-color: #00e5ff; color: #a9d9e1; box-shadow: none; }
  html[data-theme=dark] .ok { color: #4ade80; } html[data-theme=dark] .bad { color: #ff6b7a; }
+ html[data-theme=dark] h2 .lock.on { color: #ff6b7a; }
+ html[data-theme=dark] h2 form.lock button { border-color: #17505c; background: #04141a; color: #8fd6e0; }
+ html[data-theme=dark] h2 form.lock button:hover { border-color: #ff6b7a; color: #ff6b7a; }
  html[data-theme=dark] form.nodedel button { border-color: #ff6b7a; background: none; color: #ff6b7a; }
  html[data-theme=dark] form.nodedel button:hover { background: #ff6b7a; color: #000; }
  html[data-theme=dark] footer { color: #5f8a91; }
@@ -2585,6 +2691,11 @@ PAGE = """<!doctype html>
  .heat, ul.menu li .stat b.heat {{ color: hsl(var(--h), 90%, 38%); }}
  .ok {{ color: #1b7f3b; }} .bad {{ color: #b00020; }}
  form.nodedel {{ margin: 0; }}
+ h2 .lock {{ margin-left: 14px; font-size: 12px; letter-spacing: 0; text-transform: none; font-weight: 400; vertical-align: middle; }}
+ h2 form.lock {{ display: inline; }}
+ h2 .lock.on {{ color: #b00020; font-weight: 600; }}
+ h2 form.lock button {{ cursor: pointer; font-size: 12px; padding: 2px 9px; border-radius: 6px; border: 1px solid #d8dde5; background: #fff; color: #555; }}
+ h2 form.lock button:hover {{ border-color: #b00020; color: #b00020; }}
  form.nodedel button {{ cursor: pointer; font-size: 12px; padding: 2px 9px; border-radius: 6px;
    border: 1px solid #b00020; background: #fff; color: #b00020; }}
  form.nodedel button:hover {{ background: #b00020; color: #fff; }}
@@ -2778,11 +2889,40 @@ def _system_gate():
     """The controls of a System entry (POST /app/<namespace>/...) are for
     admins. The page does not draw them for anyone else; this is the check
     behind that."""
-    if request.method != "POST" or not request.path.startswith("/app/"):
+    if request.method != "POST":
+        return
+    # Locked: nothing of System's changes from here, whoever asks.
+    frozen = request.path.startswith("/node/") or request.path == "/api/chat/claude-key"
+    if not request.path.startswith("/app/"):
+        if frozen and system_locked():
+            raise HTTPError(423, _locked_text())
         return
     ns = request.path.split("/")[2] if request.path.count("/") >= 2 else ""
-    if ns in _system_namespaces() and not _is_admin():
-        raise HTTPError(403, "system apps are for admins\n")
+    if ns in _system_namespaces():
+        if not _is_admin():
+            raise HTTPError(403, "system apps are for admins\n")
+        if system_locked():
+            raise HTTPError(423, _locked_text())
+
+
+def _locked_text():
+    lock = system_lock()
+    return f"System is locked (by {lock.get('by') or 'an admin'}, {lock.get('at') or 'some time ago'}): an admin has to unlock it first\n"
+
+
+@app.route("/system/<what:re:lock|unlock>", method="POST")
+def system_lock_route(what):
+    """An admin locks, or unlocks, the System controls."""
+    if not _is_admin():
+        raise HTTPError(403, "locking is for admins\n")
+    try:
+        system_lock_set(what == "lock", _chat_nick())
+    except ValueError as e:
+        raise HTTPError(409, f"{e}\n")
+    except client.exceptions.ApiException as e:
+        raise HTTPError(502, f"could not save the lock: {e.reason}\n")
+    _bump()
+    redirect("/")
 
 
 @app.hook("before_request")
@@ -3018,6 +3158,8 @@ def index():
     shown = [(k, gw) for k, gw in EXPOSURES if (GATEWAY_NAMESPACE, gw) in gws]
     rows = [(r, False) for r in d["routes"]] + [(r, True) for r in d.get("l4", [])]
     admin = _is_admin()
+    lock = system_lock()
+    sys_locked = bool(lock.get("locked"))
     for (host, ns, svc, port, ip, group, rns, rname, exposed, pub), l4 in rows:
         me_too = svc == "aviary-frontend"  # that's us: listed first under System
         label = host.split(".", 1)[0]
@@ -3088,11 +3230,14 @@ def index():
         # System entries are for admins: anyone else sees them greyed out, with
         # no link and no controls (and _system_gate refuses the controls).
         locked = (is_system or me_too) and not admin
-        if locked:
+        # Locked by an admin: a System entry keeps its link (for admins) but
+        # has no controls, for anyone.
+        frozen = sys_locked and (is_system or me_too)
+        if locked or frozen:
             warn, act, restart, images = "", '<div class="act"></div>', '<div class="act"></div>', '<div class="act"></div>'
         switches = ""
         for key, gw in shown:
-            if locked:
+            if locked or frozen:
                 switches += '<div class="sw"></div>'
                 continue
             # System web pages have no switches; a system service that is not
@@ -3142,7 +3287,24 @@ def index():
             system_items.insert(0, (label, row))
         else:
             (system_items if is_system else items).append((label, row))
-    nodes_html = _node_rows_html(d["nodes"], admin)
+    nodes_html = _node_rows_html(d["nodes"], admin and not sys_locked)
+    # The System heading carries the lock: its state for everyone, and the
+    # button for admins (where there is an AviaryConfig to keep it in).
+    if sys_locked:
+        lock_html = (f'<span class="lock on" title="{html.escape(lock.get("sync") or "")}">&#128274; locked by '
+                     f'{html.escape(lock.get("by") or "an admin")}'
+                     f'{", " + html.escape(lock["at"]) if lock.get("at") else ""}</span>')
+        if admin:
+            lock_html += ('<form class="lock" method="post" action="/system/unlock" onsubmit="return confirm('
+                          '\'Unlock System? Its controls work again for every admin.\')"><button>unlock</button></form>')
+    elif admin and aviary_config():
+        lock_html = ('<form class="lock" method="post" action="/system/lock" onsubmit="return confirm('
+                     '\'Lock System? Nobody, admins included, can stop, restart, scale or re-expose a System app, '
+                     'delete a node or change the API key from this page until an admin unlocks it. '
+                     'The gates\\\' admin team is first set to gitea\\\'s site administrators.\')">'
+                     '<button title="lock the System controls">&#128275; lock</button></form>')
+    else:
+        lock_html = ""
     by_ip = {}
     for r in d["routes"]:
         if r[8] or r[4]:  # on no Gateway at all: nothing to resolve it to
@@ -3170,7 +3332,7 @@ def index():
         menu="".join(items),
         menu_head=_menu_head(shown, True) if items else "",
         system=(
-            f'<h2>System</h2>\n<ul class="menu" data-list="system">{_menu_head(shown, system_switches)}{"".join(system_items)}</ul>'
+            f'<h2>System{lock_html}</h2>\n<ul class="menu" data-list="system">{_menu_head(shown, system_switches)}{"".join(system_items)}</ul>'
             if system_items else ""
         ),
         nodes=nodes_html,
@@ -3192,7 +3354,7 @@ def api_nodes():
     """The node table body, for the page's live refresh. Gated like the rest of
     the app (not a public path), so the browser's session cookie carries in."""
     response.content_type = "text/html; charset=utf-8"
-    return _node_rows_html(nodes_snapshot(), _is_admin())
+    return _node_rows_html(nodes_snapshot(), _is_admin() and not system_locked())
 
 
 # Which model the room talks to. It starts as CHAT_MODEL; the model menu can
@@ -4482,7 +4644,7 @@ def api_chat_models():
     # The key box: for admins, when the SDK is there. The key itself never
     # goes back to the page -- only whether there is one and how it ends.
     key = claude_key()
-    claude = {"box": bool(anthropic) and _is_admin(), "set": bool(key), "ends": key[-4:] if len(key) > 12 else "",
+    claude = {"box": bool(anthropic) and _is_admin() and not system_locked(), "set": bool(key), "ends": key[-4:] if len(key) > 12 else "",
               "from_env": bool(os.environ.get("ANTHROPIC_API_KEY"))}
     return json.dumps({"current": chat_model(), "nick": chat_nick(), "models": models, "note": note, "claude": claude,
                        "pull": _pull or None})

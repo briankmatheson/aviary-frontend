@@ -1375,7 +1375,12 @@ CHAT_CSS = """
  #chat .chat-log { flex: 1 1 auto; position: relative; z-index: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
  #chat form button.pen { flex: 0 0 auto; margin-left: 10px; padding: 0 2px; border: 0; background: none; cursor: pointer;
    font: inherit; color: #999; }
+ #chat form button.pen { transition: transform .12s ease; transform-origin: 50% 60%; }
  #chat form button.pen:hover, #chat.drawing form button.pen { color: #1a4d8f; }
+ /* The marker is small until the pointer is on it (or it is in hand). */
+ #chat form button.pen:hover, #chat form button.pen:focus-visible { transform: scale(2.2); }
+ #chat.drawing form button.pen { transform: scale(1.5); }
+ #chat.drawing form button.pen:hover { transform: scale(2.2); }
  #chat .chat-log .hint { margin: auto; color: #999; font-style: italic; text-align: center; }
  #chat .msg { white-space: pre-wrap; overflow-wrap: anywhere; }
  #chat .msg .nick { color: #1a4d8f; }
@@ -1419,7 +1424,7 @@ CHAT_HTML = """
 <section id="chat" class="__CLASS__" aria-label="Whiteboard" data-hint="__HINT__" data-nick="__RAWNICK__" data-me="__ME__">
  <div class="board"><canvas aria-hidden="true"></canvas><div class="chat-log" aria-live="polite"></div></div>
  <hr>
- <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off" maxlength="4000"><button type="button" class="pen" title="draw on the whiteboard (click again to stop; /erase wipes the drawing)" aria-pressed="false">&#9998;</button><button type="button" class="model" title="choose or install a model">__NICK__ &#9662;</button></form>
+ <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off" maxlength="4000"><button type="button" class="pen" title="the marker: draw on the whiteboard (click again to put it down; /erase wipes the drawing)" aria-pressed="false">&#9998;</button><button type="button" class="model" title="choose or install a model">__NICK__ &#9662;</button></form>
 </section>
 <dialog id="md">
  <h3>Model</h3>

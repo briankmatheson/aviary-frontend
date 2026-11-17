@@ -91,10 +91,14 @@ ADMIN_ONLY = os.environ.get("OAUTH_ADMIN_ONLY", "false").lower() in ("1", "true"
 # their admin team), so that takes effect when the session next runs out. With
 # gitea still signed in, the trip back is a redirect nobody notices.
 SESSION_SECONDS = max(1, int(os.environ.get("SESSION_MINUTES", "30"))) * 60
-# Who counts as an admin on this page, besides gitea's site administrators:
-# members of this gitea team ("org:team"). The gateway's gates in front of the
-# System apps go by the same team (the groups claim of gitea's ID token).
-ADMIN_TEAM = os.environ.get("ADMIN_TEAM", "aviary:admins").lower()
+# An admin on this page is a gitea site administrator: the is_admin flag on
+# the account (gitea: Site Administration > User Accounts > the user >
+# "Is Administrator"). Nothing else. ADMIN_TEAM ("org:team") can name a gitea
+# team whose members count as well; it is empty unless set. (The gateway's
+# gates in front of the System apps can only see a team, in the groups claim
+# of gitea's ID token; aviary-deploy keeps that team equal to the site
+# administrators.)
+ADMIN_TEAM = os.environ.get("ADMIN_TEAM", "").lower()
 AUTH_ENABLED = bool(OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET and OAUTH_ISSUER and SESSION_SECRET and BASE_URL)
 REDIRECT_URI = f"{BASE_URL}/oauth/callback"
 _GITEA_API = GITEA_INTERNAL or OAUTH_ISSUER
@@ -2509,8 +2513,8 @@ def _session_user():
 
 
 def _is_admin():
-    """Whether the person asking is an admin: a gitea site administrator or a
-    member of ADMIN_TEAM (as gitea said at login). With
+    """Whether the person asking is an admin: a gitea site administrator (or,
+    if ADMIN_TEAM is set, a member of it), as gitea said at login. With
     login off, or with the bypass token, everyone is: there is nobody to tell
     apart."""
     if not AUTH_ENABLED or _bypass_ok():
@@ -2520,8 +2524,9 @@ def _is_admin():
 
 
 def _gitea_admin(user, access):
-    """Admin, as gitea has it at login: a site administrator, or a member of
-    ADMIN_TEAM. A team lookup that fails counts as not a member."""
+    """Admin, as gitea has it at login: a site administrator (is_admin), or,
+    only if ADMIN_TEAM is set, a member of that team. A team lookup that fails
+    counts as not a member."""
     if user.get("is_admin"):
         return True
     if not ADMIN_TEAM:

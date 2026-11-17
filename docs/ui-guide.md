@@ -6,8 +6,8 @@ never seen it can operate it and explain it. It describes the page as built on
 2026-11-16. It contains no passwords or keys.
 
 Conventions used below: **bold** is text you see on screen; `code` is
-something you type or a URL; "admin" means a member of the Gitea team
-`aviary/admins` (or a Gitea site administrator).
+something you type or a URL; "admin" means a Gitea site administrator (an
+account with **Is Administrator** ticked in Gitea).
 
 ---
 
@@ -98,8 +98,10 @@ After a gate lets you through, some apps still ask for a login of their own:
 grafana, cnpg-ui (user `admin`), and argo.
 
 If a gated admin-only app shows **RBAC: access denied**, you are signed in but
-not an admin. An admin has to add you to the `admins` team of the `aviary`
-organisation in Gitea. Team membership is read when you sign in to the gate,
+not an admin as the gate sees it. The gates cannot see Gitea's administrator
+flag, only teams: they go by the `admins` team of the `aviary` organisation,
+which is meant to hold exactly the site administrators. Team membership is
+read when you sign in to the gate,
 so after being added open `https://<app>.aviary.mesh.bmath.nyc/oauth2/logout`
 once and then open the app again.
 
@@ -393,4 +395,8 @@ cannot resolve the Aviary names, copy these lines into its `/etc/hosts` file.
 | Enter or remove the Anthropic API key | No | Yes |
 | Rearrange your own rows | Yes | Yes |
 
-Admins are the members of the Gitea team `aviary/admins`.
+Admins are Gitea's site administrators: in Gitea, **Site Administration >
+Identity & Access > User Accounts**, edit the user, tick **Is
+Administrator**. The landing page reads that flag when you sign in, so a
+change takes effect at your next sign-in (at most 30 minutes, or log out and
+in). The gated System apps go by the `aviary/admins` team instead (see 2.5).

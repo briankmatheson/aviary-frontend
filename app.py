@@ -809,7 +809,8 @@ def app_resources(ns):
                  that sets a request but no limit is rejected if the default
                  limit is below its request
       request,
-      limit      the LimitRange's current values, or a suggestion if unset
+      limit      the LimitRange's current values, or a suggestion if unset;
+                 limit 0 means no limit
       saved      whether those came from an existing LimitRange
     """
     v1 = client.CoreV1Api()
@@ -841,13 +842,15 @@ def app_resources(ns):
     out = {"saved": bool(req or lim)}
     for res, key in (("cpu", "cpu"), ("memory", "mem")):
         r = _q(req[res]) if res in req else max(usage[res] * 1.25, least[res])
-        l = _q(lim[res]) if res in lim else max(2 * r, floor[res])
-        l = min(l, top[res])
+        if res in req and res not in lim:
+            l = 0.0   # saved with a request and no limit: no limit
+        else:
+            l = min(_q(lim[res]) if res in lim else max(2 * r, floor[res]), top[res])
         out[key] = {
             "usage": usage[res] / unit[res],
             "top": top[res] / unit[res],
             "floor": floor[res] / unit[res],
-            "request": min(r, l) / unit[res],
+            "request": (min(r, l) if l else min(r, top[res])) / unit[res],
             "limit": l / unit[res],
         }
     try:
@@ -1693,7 +1696,8 @@ RL_HTML = """
 <dialog id="rl"><form method="post">
  <h3>Scale: <span id="rl-app"></span></h3>
  <p class="note">Requests and limits are defaults for each container in this app that sets none
- of its own (a namespace LimitRange); the bar is filled to the app's busiest container. Pods are
+ of its own (a namespace LimitRange); the bar is filled to the app's busiest container. Slide a limit
+ all the way down for no limit. Pods are
  set per workload: one that keeps its data on a volume of its own usually cannot run more than one.</p>
  <div class="rl-row" data-res="cpu"><div class="rl-head"><b>CPU</b><span class="now"></span></div>
   <div class="rl-slider"><div class="rl-track"><div class="rl-fill"></div></div><div class="rl-band"></div>
@@ -1738,23 +1742,30 @@ RL_HTML = """
     var top = Math.floor(d.top), floor = Math.min(top, Math.ceil(d.floor));
     function draw(moved) {
       var r = Math.min(snap(res, val(+lo.value)), top), l = Math.min(snap(res, val(+hi.value)), top);
-      if (l < floor) l = floor;
-      if (r > l) { if (moved === hi) r = l; else l = r; }
-      lo.value = pos(r); hi.value = pos(l);
+      // The limit thumb pulled all the way down: no limit (sent as 0). The
+      // request stays where it is; containers run unlimited above it.
+      var none = +hi.value <= 0 || (moved === hi && val(+hi.value) < (res === 'cpu' ? 2.5 : 2));
+      if (none) l = 0;
+      else {
+        if (l < floor) l = floor;
+        if (r > l) { if (moved === hi) r = l; else l = r; }
+      }
+      lo.value = pos(r); hi.value = none ? 0 : pos(l);
       row.querySelector('.req').textContent = fmt(res, r);
-      row.querySelector('.lim').textContent = fmt(res, l);
+      row.querySelector('.lim').textContent = none ? 'none' : fmt(res, l);
       row.querySelector('[name=' + res + '_request]').value = r;
       row.querySelector('[name=' + res + '_limit]').value = l;
       var band = row.querySelector('.rl-band');
-      band.style.left = pos(r) / 10 + '%'; band.style.width = Math.max(0, pos(l) - pos(r)) / 10 + '%';
-      // Fill: usage on the same scale, coloured by how close it is to the limit.
-      var fill = row.querySelector('.rl-fill'), f = Math.min(1, d.usage / l);
+      band.style.left = pos(r) / 10 + '%'; band.style.width = (none ? 0 : Math.max(0, pos(l) - pos(r))) / 10 + '%';
+      // Fill: usage on the same scale, coloured by how close it is to the limit
+      // (with no limit, to the top of the scale).
+      var fill = row.querySelector('.rl-fill'), f = Math.min(1, d.usage / (none ? d.top : l));
       fill.style.width = pos(d.usage) / 10 + '%';
       fill.style.background = 'hsl(' + Math.round(240 * (1 - f)) + ',85%,55%)';
       // Whichever thumb is nearer the pointer's side stays on top when they meet.
       lo.style.zIndex = +lo.value > 500 ? 3 : 2; hi.style.zIndex = +lo.value > 500 ? 2 : 3;
     }
-    lo.value = pos(d.request); hi.value = pos(d.limit);
+    lo.value = pos(d.request); hi.value = d.limit > 0 ? pos(d.limit) : 0;
     lo.oninput = function () { draw(lo); }; hi.oninput = function () { draw(hi); };
     row.querySelector('.now').textContent = 'busiest container now: ' + fmt(res, d.usage);
     draw();
@@ -3708,19 +3719,25 @@ def app_resources_set(ns):
         raise HTTPError(400, "requests and limits must be whole millicores / Mi\n")
     for key, name in (("cpu", "cpu"), ("mem", "memory")):
         r, l = val[f"{key}_request"], val[f"{key}_limit"]
+        if l == 0:
+            # No limit: containers that set none run unlimited (only the request applies).
+            if not 0 < r <= cur[key]["top"]:
+                raise HTTPError(400, f"{name}: need 0 < request <= the largest node\n")
+            continue
         if not 0 < r <= l <= cur[key]["top"]:
-            raise HTTPError(400, f"{name}: need 0 < request <= limit <= the largest node\n")
+            raise HTTPError(400, f"{name}: need 0 < request <= limit <= the largest node (or limit 0 for none)\n")
         if l < cur[key]["floor"]:
             raise HTTPError(400, f"{name}: a container here already requests more than that limit\n")
+    limits = {res: f"{val[f'{key}_limit']}{suffix}" for key, res, suffix in (("cpu", "cpu", "m"), ("mem", "memory", "Mi"))
+              if val[f"{key}_limit"]}
     body = {
         "apiVersion": "v1", "kind": "LimitRange",
         "metadata": {"name": LIMITRANGE, "namespace": ns,
                      "labels": {"app.kubernetes.io/managed-by": "aviary-frontend"}},
-        "spec": {"limits": [{
+        "spec": {"limits": [dict({
             "type": "Container",
             "defaultRequest": {"cpu": f"{val['cpu_request']}m", "memory": f"{val['mem_request']}Mi"},
-            "default": {"cpu": f"{val['cpu_limit']}m", "memory": f"{val['mem_limit']}Mi"},
-        }]},
+        }, **({"default": limits} if limits else {}))]},
     }
     # Pods: fields named scale.<kind>.<name>, one per workload in the popup.
     wanted = {}

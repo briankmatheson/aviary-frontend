@@ -33,7 +33,9 @@ empties the room, `/stop` or Escape cuts a reply short. The name at the end
 of the input line opens the model menu: switch the room to any model Ollama
 has installed, or install another by name (`llama3.3:70b`,
 `hf.co/user/repo:Q4_K_M`). The choice is kept in the `aviary-chat` ConfigMap
-(`CHAT_STATE_CONFIGMAP`). The transcript is kept
+(`CHAT_STATE_CONFIGMAP`). The same ConfigMap's `briefing` key, if set, is background
+handed to the model with every question (how sign-in works here, what each app
+is for, who to ask): edit it with kubectl, no rebuild. The transcript is kept
 in memory, so the app runs as a single gunicorn worker and a restart empties
 the room. With no GPU in the cluster the room stays open and the model is marked away, IRC style.
 

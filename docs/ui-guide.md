@@ -188,7 +188,10 @@ When a GPU returns the room says `* <name> is back`.
 - Press and drag on the board to draw. Each person's strokes have their own
   colour. A stroke is shared with everyone when you release the button.
 - Click the marker again to put it down, so that clicks go to the text again.
-- `/erase` wipes the drawing for everybody.
+- The **eraser** (the button beside the marker) wipes the drawing for
+  everybody, after asking **Wipe the drawing for everyone? The lines stay.**
+  Typing `/erase` does the same without asking. Neither removes the lines;
+  `/clear` empties the whole board.
 - The model does not see the drawing, only the text.
 
 ### 5.4 The model menu

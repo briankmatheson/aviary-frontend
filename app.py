@@ -999,12 +999,22 @@ _peak = {"at": 0.0, "cpu": {}, "mem": {}}
 _peaklock = threading.Lock()
 
 
+_cpeaks = {}   # (namespaces...) -> (when asked, {"cpu": cores, "memory": bytes})
+
+
 def container_peaks(namespaces, now):
     """{"cpu": cores, "memory": bytes}: the most any single container in these
     namespaces has used over PEAK_WINDOW (Prometheus), and never less than
     `now`, the busiest container at the moment. Asked when a scale popup opens."""
     out = dict(now)
     if PROMETHEUS_URL and namespaces:
+        # Two queries over a week of samples are most of what the popup waits
+        # for, and a week's maximum hardly moves: keep the answer five minutes.
+        key = tuple(sorted(namespaces))
+        kept = _cpeaks.get(key)
+        if kept and time.time() - kept[0] < 300:
+            return {res: max(out[res], kept[1].get(res, 0.0)) for res in out}
+        found = {}
         # Namespace names are DNS labels (letters, digits, hyphens): nothing to escape.
         names = [n for n in namespaces if re.fullmatch(r"[a-z0-9-]+", n)]
         sel = 'container!="",container!="POD",namespace=~"%s"' % "|".join(names)
@@ -1014,7 +1024,10 @@ def container_peaks(namespaces, now):
         )
         for res, expr in asked:
             for v in _prom(expr, by="").values():
+                found[res] = max(found.get(res, 0.0), v)
                 out[res] = max(out[res], v)
+        if found:   # an unanswered query is asked again next time
+            _cpeaks[key] = (time.time(), found)
     return out
 
 
@@ -1415,6 +1428,9 @@ RL_CSS = """
  ul.menu li .act .warn:hover { background: #a80f1d; }
  ul.menu li .act .warn.set { background: #c9ced6; color: #555; font-size: 13px; }
  ul.menu li .act .warn.set:hover { background: #b3bac4; }
+ /* Opened at the click, before its figures have arrived: same size, nothing to press. */
+ dialog#rl.loading form > :not(h3):not(.note) { visibility: hidden; }
+ dialog#rl.loading h3::after { content: " \\2026"; font-weight: normal; opacity: .6; }
  dialog#rl { border: 0; border-radius: 10px; padding: 22px 26px; width: min(560px, 92vw);
    box-shadow: 0 12px 40px rgba(0,0,0,.3); font: 15px/1.4 system-ui, sans-serif; color: #222; }
  dialog#rl::backdrop { background: rgba(20,30,45,.45); }
@@ -1806,7 +1822,11 @@ CHAT_HTML = """
   }
   pick.onclick = function () {
     say2('');
-    refresh().then(function () { dlg.showModal(); }).catch(function (e) { alert('Could not load the models: ' + e.message); });
+    // Open at the click (with the list as it last was, or a note the first
+    // time); the answer replaces it when it arrives.
+    if (!list.firstChild) list.appendChild(el('div', 'md-m', 'loading\u2026'));
+    dlg.showModal();
+    refresh().catch(function (e) { if (dlg.open) dlg.close(); alert('Could not load the models: ' + e.message); });
   };
   pform.onsubmit = function (e) {
     e.preventDefault();
@@ -1856,7 +1876,7 @@ RL_HTML = """
 (function () {
   var dlg = document.getElementById('rl');
   if (!dlg || !dlg.showModal) return;
-  var form = dlg.querySelector('form'), err = dlg.querySelector('.rl-err');
+  var form = dlg.querySelector('form'), err = dlg.querySelector('.rl-err'), asked = 0;
   function fmt(res, v) {
     if (res === 'cpu') return v < 1000 ? Math.round(v) + 'm' : (v / 1000).toFixed(1);
     return v < 1024 ? Math.round(v) + 'Mi' : (v / 1024).toFixed(1) + 'Gi';
@@ -1908,11 +1928,15 @@ RL_HTML = """
   document.addEventListener('click', function (e) {
     var b = e.target.closest ? e.target.closest('button.warn') : null;
     if (!b) return;
+    // Open at the click; the figures are filled in when they arrive.
+    var mine = ++asked;
+    document.getElementById('rl-app').textContent = b.dataset.app;
+    dlg.classList.add('loading'); dlg.showModal();
     fetch('/api/app/' + encodeURIComponent(b.dataset.ns) + '/resources', { credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
       .then(function (d) {
+        if (mine !== asked || !dlg.open) return;   // closed, or another app's was opened since
         form.action = '/app/' + encodeURIComponent(b.dataset.ns) + '/resources';
-        document.getElementById('rl-app').textContent = b.dataset.app;
         form.restart.checked = false; err.textContent = '';
         dlg.querySelectorAll('.rl-row').forEach(function (row) { setup(row, d[row.dataset.res]); });
         // One line per workload: its name, how many pods are ready, and a number to change.
@@ -1927,9 +1951,9 @@ RL_HTML = """
           line.appendChild(name); line.appendChild(was); line.appendChild(n); list.appendChild(line);
         });
         dlg.querySelector('.rl-pods').hidden = !(d.workloads || []).length;
-        dlg.showModal();
+        dlg.classList.remove('loading');
       })
-      .catch(function (x) { alert('Could not load requests and limits (' + x + ')'); });
+      .catch(function (x) { if (mine !== asked) return; if (dlg.open) dlg.close(); alert('Could not load requests and limits (' + x + ')'); });
   });
   dlg.querySelector('.cancel').onclick = function () { dlg.close(); };
   dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
@@ -1973,7 +1997,7 @@ IMG_HTML = """
 (function () {
   var dlg = document.getElementById('im');
   if (!dlg || !dlg.showModal) return;
-  var list = dlg.querySelector('.im-list');
+  var list = dlg.querySelector('.im-list'), asked = 0;
   function el(tag, cls, text) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -2013,14 +2037,15 @@ IMG_HTML = """
   document.addEventListener('click', function (e) {
     var b = e.target.closest ? e.target.closest('button.imgs') : null;
     if (!b) return;
+    // Open at the click; the list is filled in when it arrives.
+    var mine = ++asked;
+    document.getElementById('im-app').textContent = b.dataset.app;
+    list.textContent = 'loading\u2026';
+    dlg.showModal();
     fetch('/api/app/' + encodeURIComponent(b.dataset.ns) + '/images', { credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
-      .then(function (d) {
-        document.getElementById('im-app').textContent = b.dataset.app;
-        render(b.dataset.ns, d);
-        dlg.showModal();
-      })
-      .catch(function (x) { alert('Could not load images (' + x + ')'); });
+      .then(function (d) { if (mine === asked && dlg.open) render(b.dataset.ns, d); })
+      .catch(function (x) { if (mine !== asked) return; if (dlg.open) dlg.close(); alert('Could not load images (' + x + ')'); });
   });
   dlg.querySelector('.cancel').onclick = function () { dlg.close(); };
   dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });

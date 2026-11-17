@@ -1639,7 +1639,8 @@ CHAT_HTML = """
   }
   // What was typed here before, newest last, for Up and Down to walk through
   // (this page's memory only).
-  var past = [], at = 0, draft = '';
+  // ("where", not "at": the drawing code further down has a function at().)
+  var past = [], where = 0, draft = '';
   form.onsubmit = function (e) {
     e.preventDefault();
     var text = inp.value.trim();
@@ -1647,14 +1648,14 @@ CHAT_HTML = """
     inp.value = '';
     if (past[past.length - 1] !== text) past.push(text);
     if (past.length > 100) past.shift();
-    at = past.length; draft = '';
+    where = past.length; draft = '';
     say(text);
   };
   function recall(step) {
     if (!past.length) return;
-    if (at === past.length) draft = inp.value;
-    at = Math.max(0, Math.min(past.length, at + step));
-    inp.value = at === past.length ? draft : past[at];
+    if (where === past.length) draft = inp.value;
+    where = Math.max(0, Math.min(past.length, where + step));
+    inp.value = where === past.length ? draft : past[where];
     inp.setSelectionRange(inp.value.length, inp.value.length);
   }
   inp.addEventListener('keydown', function (e) {

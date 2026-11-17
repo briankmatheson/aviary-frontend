@@ -18,6 +18,12 @@ Deployed by [aviary-deploy](https://github.com/briankmatheson/aviary-deploy)
 with read access to httproutes, gateways, nodes, the ClusterIssuer and its CA
 secret.
 
+A node that is not Ready gets a **delete** button in the node table (never a
+control-plane node), for admins only. It force-deletes the pods still bound to the node,
+removes its VolumeAttachments and deletes the Node, after asking. It does not
+touch the machine itself or the mesh: a box that has left for good is also
+removed on the hub with `xdctl mesh peer rm`.
+
 Each app row ends in two switches, **private** and **public**: they attach
 the app's `HTTPRoute` to, or detach it from, the internal Gateway (`aviary`)
 and the NATed one (`aviary-nat`, aviary-deploy's `nat_gateway_ip`). System

@@ -2003,15 +2003,48 @@ def oauth_callback():
 
 @app.route("/logout")
 def logout():
+    """Log out of this page, of gitea, and of the gateway's gates in front of
+    the apps. Dropping our own cookie is not enough: gitea's session is still
+    live, so the next visit would be signed straight back in, and each gated
+    app keeps a session of its own.
+
+    The page that comes back does the rest from the browser, in order: gitea's
+    logout first (while it is signed in, a gate would only sign the app back
+    in), then every app's gate logout (/oauth2/logout; a 404 where there is no
+    gate). They are fetched as images, which carries the cookies when the names
+    share a site with this page; the link at the end is the way through for
+    when they do not (or without JavaScript)."""
     response.delete_cookie("aviary_session", path="/", secure=True, samesite="lax")
     response.delete_cookie("aviary_admin", path="/", secure=True, samesite="lax")
-    # Don't bounce to /login: gitea's SSO session is still live, so it would
-    # silently re-authenticate and the logout would look like it did nothing.
+    response.set_header("Cache-Control", "no-store")
+    hosts = []
+    try:
+        for r in snapshot()["routes"]:
+            hosts += [h for h in (r[0], r[9]) if h and h not in hosts]
+    except Exception:
+        pass  # no cluster view: gitea's logout still happens
+    issuer_logout = f"{OAUTH_ISSUER}/user/logout" if OAUTH_ISSUER else ""
     return (
         "<!doctype html><meta charset=utf-8><title>Aviary</title>"
-        '<body style="font:16px/1.5 system-ui,sans-serif;text-align:center;'
-        'padding:64px;color:#333">Logged out. '
-        '<a href="/login">Log in again</a></body>'
+        '<body style="font:16px/1.5 system-ui,sans-serif;text-align:center;padding:64px;color:#333">'
+        '<p id="msg">Logging out&hellip;</p>'
+        '<p><a href="/login">Log in again</a></p>'
+        + (f'<p style="font-size:13px;color:#777">Still signed in to gitea? '
+           f'<a href="{html.escape(issuer_logout)}">Log out of gitea</a>.</p>' if issuer_logout else "")
+        + "<script>(function () {"
+        f"var gitea = {json.dumps(issuer_logout)}, apps = {json.dumps(hosts)};"
+        """
+  function hit(url) {   // resolves whether it loads or not: only the request matters
+    return new Promise(function (done) {
+      var i = new Image(), t = setTimeout(done, 4000);
+      i.onload = i.onerror = function () { clearTimeout(t); done(); };
+      i.src = url;
+    });
+  }
+  (gitea ? hit(gitea) : Promise.resolve())
+    .then(function () { return Promise.all(apps.map(function (h) { return hit('https://' + h + '/oauth2/logout'); })); })
+    .then(function () { document.getElementById('msg').textContent = 'Logged out.'; });
+})();</script><noscript><p>Logged out of this page.</p></noscript></body>"""
     )
 
 

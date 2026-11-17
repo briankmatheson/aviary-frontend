@@ -2400,7 +2400,8 @@ SPLASH_CSS = """
  #splash .cage path:nth-of-type(5) { animation-delay: .4s; }
  #splash .cage .door path { animation-delay: .45s; }
  #splash .cage .perch { stroke-width: .2px; }
- #splash .door path { fill: #fbfbf8; }
+ #splash .door .mesh { stroke-width: .06px; opacity: 0; stroke-dasharray: none; stroke-dashoffset: 0;
+                       animation: splash-in .4s ease-out .7s forwards; }
  #splash .door { transform-origin: 23.33px 22.5px; animation: splash-door .45s cubic-bezier(.5, 0, .3, 1.3) 1.05s forwards; }
  #splash .bird { stroke-width: 3px; fill: #fbfbf8; opacity: 0; animation: splash-in .3s ease-out .6s forwards; }
  #splash .bird path { vector-effect: non-scaling-stroke; }
@@ -2441,7 +2442,7 @@ SPLASH_HTML = """<div id="splash" aria-hidden="true">
   <path pathLength="1" d="M20 6V15.4M20 6A10 10 0 0 0 10 15.4M20 6A6.67 10 0 0 0 13.33 15.4M20 6A3.33 10 0 0 0 16.67 15.4M20 6A3.33 10 0 0 1 23.33 15.4M20 6A6.67 10 0 0 1 26.67 15.4M20 6A10 10 0 0 1 30 15.4"/>
   <path pathLength="1" d="M20 6a1.25 1.25 0 1 1 .01 0"/>
   <path pathLength="1" class="perch" d="M10 24.9H30"/>
-  <g class="door"><path pathLength="1" d="M16.67 18.5H23.33V26.5H16.67ZM20 18.5V26.5"/></g>
+  <g class="door"><path class="mesh" d="M17.23 18.5V26.5M17.78 18.5V26.5M18.34 18.5V26.5M18.89 18.5V26.5M19.45 18.5V26.5M20.0 18.5V26.5M20.56 18.5V26.5M21.11 18.5V26.5M21.67 18.5V26.5M22.22 18.5V26.5M22.78 18.5V26.5M16.67 19.05H23.33M16.67 19.61H23.33M16.67 20.16H23.33M16.67 20.72H23.33M16.67 21.27H23.33M16.67 21.83H23.33M16.67 22.39H23.33M16.67 22.94H23.33M16.67 23.5H23.33M16.67 24.05H23.33M16.67 24.61H23.33M16.67 25.16H23.33M16.67 25.71H23.33M16.67 26.27H23.33"/><path pathLength="1" d="M16.67 18.5H23.33V26.5H16.67Z"/></g>
  </g>
  <g class="fx"><g class="fy"><g transform="translate(20 22.2)"><g class="grow"><g class="bird" transform="translate(-6 -4.5)">
   <path class="legs" d="M5.2 7.2V8.8M4.5 8.8H5.9M6.8 7.1V8.8M6.1 8.8H7.5"/>
@@ -2590,7 +2591,7 @@ DARK_CSS = """
  /* the splash */
  html[data-theme=dark] #splash { background-color: #000; }
  html[data-theme=dark] #splash svg { stroke: #00e5ff; }
- html[data-theme=dark] #splash .bird, html[data-theme=dark] #splash .door path { fill: #000; }
+ html[data-theme=dark] #splash .bird { fill: #000; }
  html[data-theme=dark] #splash .bird .eye { fill: #00e5ff; }
  /* the corner's light/dark switch (both themes) */
  .corner .theme { margin-top: 3px; }

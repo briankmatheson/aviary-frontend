@@ -1643,6 +1643,7 @@ CHAT_CSS = """
  #chat.drawing form button.pen:hover { transform: scale(2.2); }
  #chat .chat-log .hint { margin: auto; color: #999; font-style: italic; text-align: center; }
  #chat .msg { white-space: pre-wrap; overflow-wrap: anywhere; }
+ #chat .msg a { color: #1a4d8f; text-decoration: underline; text-underline-offset: 2px; }
  #chat .msg .nick { color: #1a4d8f; }
  #chat .msg.bot { color: #555; font-style: italic; }
  #chat .msg.bot .nick { color: #4682b4; font-style: normal; }
@@ -1745,8 +1746,35 @@ CHAT_HTML = """
       var b = document.createElement('span'); b.className = 'body';
       row.appendChild(n); row.appendChild(b);
     }
-    row.lastChild.textContent = m.text;
+    fill(row.lastChild, m.text);
     row.classList.toggle('pending', !m.done);
+  }
+  // A line's text, with its http(s) addresses as links. Built from text nodes
+  // and <a> elements only -- what was said is never parsed as HTML. A link
+  // opens in a new tab and tells the site nothing about this page.
+  function fill(b, text) {
+    if (b._text === text) return;
+    b._text = text;
+    if (text.indexOf('http') < 0) { b.textContent = text; return; }
+    var re = /https?:\\/\\/[^\\s<>"'`]+/g, at0 = 0, m2;
+    var count = function (str, ch) { return str.split(ch).length - 1; };
+    b.textContent = '';
+    while ((m2 = re.exec(text))) {
+      var url = m2[0], cut = url.length;
+      // Punctuation that ends the sentence, not the address; a closing
+      // bracket belongs to the address only if it closes one opened in it.
+      while (cut > 0 && (/[.,;:!?]/.test(url[cut - 1]) ||
+             (url[cut - 1] === ')' && count(url.slice(0, cut), ')') > count(url.slice(0, cut), '(')) ||
+             (url[cut - 1] === ']' && count(url.slice(0, cut), ']') > count(url.slice(0, cut), '[')))) cut--;
+      url = url.slice(0, cut);
+      if (url.length < 10) continue;
+      b.appendChild(document.createTextNode(text.slice(at0, m2.index)));
+      var a = document.createElement('a');
+      a.href = url; a.textContent = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      b.appendChild(a);
+      at0 = m2.index + url.length; re.lastIndex = at0;
+    }
+    b.appendChild(document.createTextNode(text.slice(at0)));
   }
   function note(text) { line('note').textContent = text; log.scrollTop = log.scrollHeight; }
   function tick() {
@@ -2376,6 +2404,7 @@ DARK_CSS = """
  html[data-theme=dark] #chat .chat-log .hint, html[data-theme=dark] #chat .msg.sys, html[data-theme=dark] #chat .msg.sys .nick,
  html[data-theme=dark] #chat input::placeholder, html[data-theme=dark] #chat .msg.pending .body:empty::after { color: #5f8a91; }
  html[data-theme=dark] #chat .msg .nick { color: #00e5ff; }
+ html[data-theme=dark] #chat .msg a { color: #5eeaff; }
  html[data-theme=dark] #chat .msg.bot { color: #a9d9e1; }
  html[data-theme=dark] #chat .msg.bot .nick { color: #7ff3ff; }
  html[data-theme=dark] #chat .msg.out { color: #d6f6fb; }

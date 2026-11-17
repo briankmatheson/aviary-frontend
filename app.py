@@ -119,6 +119,7 @@ BLURBS = {
     "qdrant": "Vector database",
     "minio": "Object store",
     "garage": "Object storage (Garage S3)",
+    "coredns-ui": "Console for the authoritative DNS",
     "jitsi": "Video conferencing",
 }
 
@@ -127,7 +128,7 @@ BLURBS = {
 # aviary/group label ("apps" or "system") on each HTTPRoute; this list is only
 # the fallback for a route without one. Keyed like BLURBS; unlisted means app.
 GROUP_LABEL = "aviary/group"
-SYSTEM = {"grafana", "headlamp", "velero", "kubeshark", "postgres-ui", "minio", "garage", "bash"}
+SYSTEM = {"grafana", "headlamp", "velero", "kubeshark", "postgres-ui", "minio", "garage", "bash", "coredns-ui"}
 # Routed over HTTP but with no page to look at (velero's route reaches only its
 # metrics port): listed like a service that is not a web page, name and no link.
 NOWEB = {"velero"}

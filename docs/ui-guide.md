@@ -443,32 +443,30 @@ Platform services. The rows work like the Apps rows, with these differences:
 
 ---
 
-### 7.1 Locking System
+### 7.1 Locks
 
-Beside the **SYSTEM** heading an admin sees a **lock** button. Pressing it
-(and confirming) does two things, in this order:
+Three parts of the page can be locked by an admin, each on its own:
 
-1. **Syncs the admins.** The gates in front of the System apps go by the
-   Gitea team `aviary:admins`; the page sets that team's members to exactly
-   Gitea's active site administrators (accounts with **Is Administrator**
-   ticked). The page does this itself, signed in to Gitea as its admin
-   account. If Gitea reports no administrators at all, nothing is changed.
-2. **Locks.** The heading then reads **locked by <who>, <when>** for
-   everyone, and nothing of System's can be changed from the page by
-   anyone, admins included: no stop, start, restart, scale, image change
-   or exposure switch on a System app, no deleting a node, no changing the
-   API key. The controls are not drawn, and the server refuses them (HTTP
-   423) if asked directly. Links to the System apps still work for admins,
-   and the Apps list is unaffected.
+| Part | Where the lock is | While locked, nobody (admins included) can |
+|---|---|---|
+| **System** | beside the **SYSTEM** heading | stop, start, restart, scale, re-image or re-expose a System app; delete a node; change the API key |
+| **Apps** | beside the **APPS** heading | stop, start, restart, scale, re-image or re-expose an app |
+| **Whiteboard** | the padlock at the right of the whiteboard's input | say anything, draw, erase, choose or install a model (the lines and the drawing stay; the input reads *the whiteboard is locked by ...*) |
 
-An admin unlocks it with the **unlock** button in the same place (which
-syncs the admins again first). Any admin can, including the one who locked.
+Locking or unlocking any part (with a confirmation) first **syncs the
+admins**: the Gitea team `aviary:admins`, which the gates in front of the
+System apps go by, is set to exactly Gitea's active site administrators. The
+page does this with a Gitea token that can only list users and edit teams.
+If Gitea reports no administrators at all, nothing is changed.
 
-The lock is kept in the cluster (`status.lock` of the AviaryConfig), so it
-survives a restart of the page and is the same for everyone;
-`kubectl get aviaryconfig` shows it. Hovering over the locked notice shows
-what the sync did. The lock stops changes made through this page only:
-someone with `kubectl` access to the cluster is not stopped by it.
+A locked part shows **locked by <who>, <when>** to everyone; hovering over it
+shows what the sync did. The controls are not drawn, and the server refuses
+them (HTTP 423) if asked directly. Any admin can unlock, in the same place.
+
+The locks are kept in the cluster (`status.locks` of the AviaryConfig), so
+they survive a restart of the page and are the same for everyone;
+`kubectl get aviaryconfig` shows them. A lock stops changes made through this
+page only: someone with `kubectl` access to the cluster is not stopped by it.
 
 ## 8. The CLUSTER table
 

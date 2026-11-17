@@ -496,28 +496,51 @@ def _setting(path, default, lo=None, hi=None):
     return v
 
 
-# The System lock. An admin locks the System controls; from then on nobody,
-# admins included, can change anything of System's from this page -- stop,
-# start, restart, scale, images, exposure, deleting a node, the API key --
-# until an admin unlocks it. It is kept in the AviaryConfig's status
-# (status.lock), so it outlasts a restart of this page and is the same for
-# everyone. Locking (and unlocking) first brings the gateway gates' admin
-# team into line with gitea's site administrators (admin_sync), so what is
-# frozen is the current set of admins.
-def system_lock():
+# Locks. An admin can lock any of three parts of the page; while a part is
+# locked nobody, admins included, can change anything in it from this page,
+# until an admin unlocks it:
+#
+#   system       the System entries' controls, deleting a node, the API key
+#   apps         the Apps entries' controls (stop, start, restart, scale,
+#                images, the exposure switches)
+#   whiteboard   saying anything, drawing, erasing, choosing or installing a
+#                model (it is read-only: the lines and the drawing stay)
+#
+# The locks are kept in the AviaryConfig's status (status.locks.<part>), so
+# they outlast a restart of this page and are the same for everyone. Locking
+# or unlocking any of them first brings the gateway gates' admin team into
+# line with gitea's site administrators (admin_sync).
+LOCK_PARTS = ("system", "apps", "whiteboard")
+LOCK_TITLES = {"system": "System", "apps": "Apps", "whiteboard": "The whiteboard"}
+
+
+def lock_state(part):
     """{"locked": bool, "by": login, "at": time, "sync": what the sync did}."""
-    lock = ((aviary_config().get("status") or {}).get("lock")) or {}
+    st = aviary_config().get("status") or {}
+    lock = (st.get("locks") or {}).get(part)
+    if lock is None and part == "system":
+        lock = st.get("lock")   # where the System lock was kept before there were three
     return lock if isinstance(lock, dict) else {}
 
 
+def is_locked(part):
+    return bool(lock_state(part).get("locked"))
+
+
+def system_lock():
+    return lock_state("system")
+
+
 def system_locked():
-    return bool(system_lock().get("locked"))
+    return is_locked("system")
 
 
-def system_lock_set(locked, who):
-    """Lock or unlock, after syncing the admins. Returns what the sync did
-    (or why it could not); the lock is set either way. Raises if there is no
-    AviaryConfig to keep it in."""
+def lock_set(part, locked, who):
+    """Lock or unlock a part, after syncing the admins. Returns what the sync
+    did (or why it could not); the lock is set either way. Raises if there is
+    no AviaryConfig to keep it in."""
+    if part not in LOCK_PARTS:
+        raise ValueError(f"no such part to lock: {part}")
     if not aviary_config(fresh=True):
         raise ValueError(f"there is no AviaryConfig named {CONFIG_NAME!r} to keep the lock in")
     try:
@@ -525,40 +548,43 @@ def system_lock_set(locked, who):
     except Exception as e:
         did = f"admins not synced: {getattr(e, 'reason', None) or e}"
     lock = {"locked": bool(locked), "by": who, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "sync": did[:500]}
-    client.CustomObjectsApi().patch_cluster_custom_object_status(*CONFIG_API, CONFIG_NAME, {"status": {"lock": lock}})
+    body = {"status": {"locks": {part: lock}}}
+    if part == "system":
+        body["status"]["lock"] = None   # the old place, now superseded
+    client.CustomObjectsApi().patch_cluster_custom_object_status(*CONFIG_API, CONFIG_NAME, body)
     aviary_config(fresh=True)
     return did
+
+
+def system_lock_set(locked, who):
+    return lock_set("system", locked, who)
 
 
 # The gateway's gates in front of the System apps can only see gitea teams
 # (the groups claim of its ID token), not the is_admin flag this page goes
 # by. admin_sync makes the gates' team equal to the site administrators. It
-# runs here, in this page's container, when an admin locks or unlocks; it
-# signs in to gitea's API as its admin account, whose password it reads from
-# the cluster (GITEA_ADMIN_PASSWORD, else the gitea Deployment's own setting).
+# runs here, in this page's container, when an admin locks or unlocks, with a
+# gitea access token scoped to listing users and editing teams (it cannot
+# read a repository or change an account): GITEA_SYNC_TOKEN, else the "token"
+# key of the Secret GITEA_SYNC_SECRET in this page's namespace.
 GATE_TEAM = os.environ.get("GATE_TEAM", "aviary:admins")
-GITEA_ADMIN_USER = os.environ.get("GITEA_ADMIN_USER", "gitea_admin")
+GITEA_SYNC_SECRET = os.environ.get("GITEA_SYNC_SECRET", "aviary-gitea-sync")
 
 
-def _gitea_admin_password():
-    given = os.environ.get("GITEA_ADMIN_PASSWORD", "")
+def _gitea_sync_token():
+    given = os.environ.get("GITEA_SYNC_TOKEN", "")
     if given:
         return given
-    parts = (urllib.parse.urlsplit(GITEA_INTERNAL).hostname or "").split(".")
-    if len(parts) < 2:
-        raise ValueError("GITEA_INTERNAL does not name gitea's namespace")
-    ns = parts[1]
-    for d in client.AppsV1Api().list_namespaced_deployment(ns).items:
-        for c in (d.spec.template.spec.init_containers or []) + d.spec.template.spec.containers:
-            for e in c.env or []:
-                if e.name == "GITEA_ADMIN_PASSWORD" and e.value:
-                    return e.value
-    raise ValueError(f"no GITEA_ADMIN_PASSWORD found in {ns}")
+    sec = client.CoreV1Api().read_namespaced_secret(GITEA_SYNC_SECRET, self_namespace())
+    tok = base64.b64decode((sec.data or {}).get("token", "")).decode().strip()
+    if not tok:
+        raise ValueError(f"the Secret {GITEA_SYNC_SECRET} has no token")
+    return tok
 
 
 def _gitea_admin_call(method, path, auth):
     req = urllib.request.Request(f"{_GITEA_API}/api/v1{path}", method=method,
-                                 headers={"Authorization": "Basic " + auth, "Accept": "application/json"})
+                                 headers={"Authorization": "token " + auth, "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=15) as r:
         body = r.read()
     return json.loads(body.decode()) if body else None
@@ -569,7 +595,7 @@ def admin_sync():
     Returns a line saying what changed. Refuses to act if gitea lists no
     administrators (a failed or empty answer must not empty the team)."""
     org, team_name = GATE_TEAM.split(":", 1)
-    auth = base64.b64encode(f"{GITEA_ADMIN_USER}:{_gitea_admin_password()}".encode()).decode()
+    auth = _gitea_sync_token()
 
     def pages(path):
         out, page = [], 1
@@ -1809,6 +1835,10 @@ CHAT_CSS = """
    font: inherit; color: #222; }
  #chat input::placeholder { color: #999; font-style: italic; }
  #chat .msg.sys, #chat .msg.sys .nick { color: #999; font-style: italic; }
+ #chat.locked form button.pen, #chat.locked form button.rub, #chat.locked form button.model { display: none; }
+ #chat form button.wblock { flex: 0 0 auto; margin-left: 8px; padding: 0; border: 0; background: none; cursor: pointer; font: inherit; opacity: .55; }
+ #chat form button.wblock:hover, #chat.locked form button.wblock { opacity: 1; }
+ #chat.locked input { cursor: not-allowed; }
  #chat form button.model { flex: 0 0 auto; margin-left: 10px; padding: 0; border: 0; background: none; cursor: pointer;
    font: inherit; font-style: italic; color: #4682b4; }
  #chat form button.model:hover { color: #1a4d8f; }
@@ -1838,10 +1868,10 @@ CHAT_CSS = """
 """
 
 CHAT_HTML = """
-<section id="chat" class="__CLASS__" aria-label="Whiteboard" data-hint="__HINT__" data-nick="__RAWNICK__" data-none="__NONE__" data-me="__ME__">
+<section id="chat" class="__CLASS__" aria-label="Whiteboard" data-hint="__HINT__" data-nick="__RAWNICK__" data-none="__NONE__" data-locked="__LOCKED__" data-admin="__ADMIN__" data-me="__ME__">
  <div class="board"><canvas aria-hidden="true"></canvas><div class="chat-log" aria-live="polite"></div></div>
  <hr>
- <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off" maxlength="4000"><button type="button" class="pen" title="the marker: draw on the whiteboard (click again to put it down; /erase wipes the drawing)" aria-pressed="false">&#9998;</button><button type="button" class="rub" title="the eraser: wipe the drawing for everyone (the lines stay; /clear empties the whole board)" aria-label="Wipe the drawing">&#9003;</button><button type="button" class="model" title="choose or install a model">__NICK__ &#9662;</button></form>
+ <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off" maxlength="4000"><button type="button" class="pen" title="the marker: draw on the whiteboard (click again to put it down; /erase wipes the drawing)" aria-pressed="false">&#9998;</button><button type="button" class="rub" title="the eraser: wipe the drawing for everyone (the lines stay; /clear empties the whole board)" aria-label="Wipe the drawing">&#9003;</button><button type="button" class="model" title="choose or install a model">__NICK__ &#9662;</button><button type="button" class="wblock" hidden title="lock the whiteboard: nobody can say, draw or change the model until an admin unlocks it">&#128275;</button></form>
 </section>
 <dialog id="md">
  <h3>Model</h3>
@@ -1869,11 +1899,21 @@ CHAT_HTML = """
   var rev = 0, epoch = '', rows = {}, busy = false, timer = null;
   var pick = form.querySelector('button.model'), nick = box.dataset.nick;
   var away = box.classList.contains('away'), none = box.dataset.none === '1';
+  var locked = box.dataset.locked || '', admin = box.dataset.admin === '1';
+  var wblock = form.querySelector('button.wblock');
   // The model's presence, IRC style: with no GPU to run on it is away (Claude,
   // when it is the one chosen, needs none). The room stays open -- people can
   // still talk to each other.
   function presence() {
     box.classList.toggle('away', away);
+    // Locked by an admin: read-only for everyone. Admins get the key.
+    box.classList.toggle('locked', !!locked);
+    inp.disabled = !!locked;
+    if (locked && box.classList.contains('drawing')) form.querySelector('button.pen').click();
+    wblock.hidden = !admin;
+    wblock.innerHTML = locked ? '&#128274;' : '&#128275;';
+    wblock.title = locked ? 'the whiteboard is ' + locked + ': unlock it' : 'lock the whiteboard: nobody can say, draw or change the model until an admin unlocks it';
+    if (locked) { inp.placeholder = 'the whiteboard is ' + locked; return; }
     pick.textContent = (none ? 'no model' : nick + (away ? ' (away)' : '')) + ' \u25be';
     inp.placeholder = 'say something \u2014 ' + (none ? 'no model is listening' : nick + (away ? ' is away' : ' is listening'));
     var h = log.querySelector('.hint'); if (h) h.textContent = box.dataset.hint;
@@ -1941,8 +1981,8 @@ CHAT_HTML = """
         if ((d.wiped || 0) > wiped) wipe(d.wiped);
         (d.strokes || []).forEach(function (st) { strokes.push(st); ink(st); });
         rev = d.rev; busy = d.busy;
-        if (d.nick !== nick || !!d.away !== away || !!d.none !== none) {   // someone switched the model, or it came or went
-          nick = d.nick; away = !!d.away; none = !!d.none; box.dataset.hint = d.hint || ''; presence();
+        if (d.nick !== nick || !!d.away !== away || !!d.none !== none || (d.locked || '') !== locked) {   // the model changed, came or went, or the board was locked
+          nick = d.nick; away = !!d.away; none = !!d.none; locked = d.locked || ''; box.dataset.hint = d.hint || ''; presence();
         }
         hint();
         if (stuck && d.msgs.length) log.scrollTop = log.scrollHeight;
@@ -2057,6 +2097,12 @@ CHAT_HTML = """
     if (String(window.getSelection && window.getSelection() || '')) return;
     inp.focus();
   });
+  wblock.onclick = function () {
+    var to = locked ? 'unlock' : 'lock';
+    if (!confirm(locked ? 'Unlock the whiteboard?' : 'Lock the whiteboard? Nobody, admins included, can say anything, draw, erase or change the model until an admin unlocks it. First the admin team of the gates is set to the site administrators of Gitea.')) return;
+    fetch('/lock/whiteboard/' + to, { method: 'POST', credentials: 'same-origin', headers: { 'X-Requested-With': 'fetch' } })
+      .then(function (r) { return r.ok ? tick() : r.text().then(function (t) { note(t.trim() || ('HTTP ' + r.status)); }); });
+  };
   cv.addEventListener('pointerup', lift);
   cv.addEventListener('pointercancel', lift);
   if (window.ResizeObserver) new ResizeObserver(fit).observe(board);
@@ -2064,6 +2110,7 @@ CHAT_HTML = """
   fit();
   inp.onkeydown = function (e) { if (e.key === 'Escape' && busy) say('/stop'); };
   document.addEventListener('visibilitychange', function () { if (!document.hidden) tick(); });
+  presence();   // as the page was drawn: locked or not, and the admin's key
   tick();
 
   // The model menu: installed models (one click switches the room to it) and
@@ -2710,7 +2757,7 @@ PAGE = """<!doctype html>
 </div>
 <h1>Aviary</h1>
 <div class="top"><div class="top-l">{fortune}</div>{chat}</div>
-<h2>Apps</h2>
+<h2>Apps{apps_lock}</h2>
 <ul class="menu" data-list="apps">{menu_head}{menu}</ul>
 {system}
 <h2>Cluster</h2>
@@ -2839,8 +2886,20 @@ def _http_get_json(url, bearer):
 
 
 def _bypass_ok():
+    """The automation token (BYPASS_TOKEN) -- but never on a request that came
+    in through the public gateway: that gateway marks every request it passes
+    with X-Aviary-Via: public (a ClientTrafficPolicy in aviary-deploy, which
+    overwrites whatever a client sent), and a public hostname is refused too."""
     if not BYPASS_TOKEN:
         return False
+    if request.get_header("X-Aviary-Via", "").strip().lower() == "public":
+        return False
+    host = (request.get_header("Host", "") or "").split(":")[0].lower()
+    try:
+        if host and host in {r[9] for r in (_cache.get("data") or {}).get("routes", []) if r[9]}:
+            return False
+    except Exception:
+        pass
     auth = request.get_header("Authorization", "") or ""
     tok = auth[7:] if auth.startswith("Bearer ") else ""
     tok = tok or request.get_header("X-Aviary-Token", "") or request.query.get("token", "")
@@ -2905,44 +2964,58 @@ def _system_namespaces():
             if r[2] == "aviary-frontend" or _is_system(r[0], r[2], r[5], d)}
 
 
+WHITEBOARD_WRITES = {"/api/chat", "/api/board", "/api/chat/model", "/api/chat/pull"}
+
+
 @app.hook("before_request")
 def _system_gate():
     """The controls of a System entry (POST /app/<namespace>/...) are for
-    admins. The page does not draw them for anyone else; this is the check
-    behind that."""
+    admins: the page does not draw them for anyone else, and this is the
+    check behind that. It also refuses (423) whatever a lock covers."""
     if request.method != "POST":
         return
-    # Locked: nothing of System's changes from here, whoever asks.
-    frozen = request.path.startswith("/node/") or request.path == "/api/chat/claude-key"
-    if not request.path.startswith("/app/"):
-        if frozen and system_locked():
-            raise HTTPError(423, _locked_text())
+    path = request.path
+    if path in WHITEBOARD_WRITES:
+        if is_locked("whiteboard"):
+            raise HTTPError(423, _locked_text("whiteboard"))
         return
-    ns = request.path.split("/")[2] if request.path.count("/") >= 2 else ""
+    if path.startswith("/node/") or path == "/api/chat/claude-key":
+        if system_locked():
+            raise HTTPError(423, _locked_text("system"))
+        return
+    if not path.startswith("/app/"):
+        return
+    ns = path.split("/")[2] if path.count("/") >= 2 else ""
     if ns in _system_namespaces():
         if not _is_admin():
             raise HTTPError(403, "system apps are for admins\n")
         if system_locked():
-            raise HTTPError(423, _locked_text())
+            raise HTTPError(423, _locked_text("system"))
+    elif is_locked("apps"):
+        raise HTTPError(423, _locked_text("apps"))
 
 
-def _locked_text():
-    lock = system_lock()
-    return f"System is locked (by {lock.get('by') or 'an admin'}, {lock.get('at') or 'some time ago'}): an admin has to unlock it first\n"
+def _locked_text(part="system"):
+    lock = lock_state(part)
+    return (f"{LOCK_TITLES.get(part, part)} is locked (by {lock.get('by') or 'an admin'}, "
+            f"{lock.get('at') or 'some time ago'}): an admin has to unlock it first\n")
 
 
+@app.route("/lock/<part:re:system|apps|whiteboard>/<what:re:lock|unlock>", method="POST")
 @app.route("/system/<what:re:lock|unlock>", method="POST")
-def system_lock_route(what):
-    """An admin locks, or unlocks, the System controls."""
+def lock_route(what, part="system"):
+    """An admin locks, or unlocks, a part of the page."""
     if not _is_admin():
         raise HTTPError(403, "locking is for admins\n")
     try:
-        system_lock_set(what == "lock", _chat_nick())
+        lock_set(part, what == "lock", _chat_nick())
     except ValueError as e:
         raise HTTPError(409, f"{e}\n")
     except client.exceptions.ApiException as e:
         raise HTTPError(502, f"could not save the lock: {e.reason}\n")
     _bump()
+    if request.get_header("X-Requested-With") == "fetch":
+        return "ok\n"
     redirect("/")
 
 
@@ -2985,6 +3058,28 @@ def api_alive():
     the idle timer starts again (_idle_timer). Nothing else."""
     response.set_header("Cache-Control", "no-store")
     return "ok\n"
+
+
+def _lock_html(part, admin, what):
+    """The lock's state for everyone, and the button for admins (where there is
+    an AviaryConfig to keep it in). `what` is what locking stops, for the
+    confirmation."""
+    lock = lock_state(part)
+    title = LOCK_TITLES[part]
+    if lock.get("locked"):
+        out = (f'<span class="lock on" title="{html.escape(lock.get("sync") or "")}">&#128274; locked by '
+               f'{html.escape(lock.get("by") or "an admin")}'
+               f'{", " + html.escape(lock["at"]) if lock.get("at") else ""}</span>')
+        if admin:
+            out += (f'<form class="lock" method="post" action="/lock/{part}/unlock" onsubmit="return confirm('
+                    f'\'Unlock {title}?\')"><button>unlock</button></form>')
+        return out
+    if admin and aviary_config():
+        return (f'<form class="lock" method="post" action="/lock/{part}/lock" onsubmit="return confirm('
+                f'\'Lock {title}? Nobody, admins included, can {what} from this page until an admin unlocks it. '
+                f'The gates\\\' admin team is first set to gitea\\\'s site administrators.\')">'
+                f'<button title="lock {title}">&#128275; lock</button></form>')
+    return ""
 
 
 @app.hook("before_request")
@@ -3219,8 +3314,8 @@ def index():
     shown = [(k, gw) for k, gw in EXPOSURES if (GATEWAY_NAMESPACE, gw) in gws]
     rows = [(r, False) for r in d["routes"]] + [(r, True) for r in d.get("l4", [])]
     admin = _is_admin()
-    lock = system_lock()
-    sys_locked = bool(lock.get("locked"))
+    sys_locked = system_locked()
+    apps_locked = is_locked("apps")
     for (host, ns, svc, port, ip, group, rns, rname, exposed, pub), l4 in rows:
         me_too = svc == "aviary-frontend"  # that's us: listed first under System
         label = host.split(".", 1)[0]
@@ -3289,7 +3384,7 @@ def index():
         locked = (is_system or me_too) and not admin
         # Locked by an admin: a System entry keeps its link (for admins) but
         # has no controls, for anyone.
-        frozen = sys_locked and (is_system or me_too)
+        frozen = (sys_locked and (is_system or me_too)) or (apps_locked and not (is_system or me_too))
         if locked or frozen:
             warn, act, restart, images = "", '<div class="act"></div>', '<div class="act"></div>', '<div class="act"></div>'
         switches = ""
@@ -3345,23 +3440,9 @@ def index():
         else:
             (system_items if is_system else items).append((label, row))
     nodes_html = _node_rows_html(d["nodes"], admin and not sys_locked)
-    # The System heading carries the lock: its state for everyone, and the
-    # button for admins (where there is an AviaryConfig to keep it in).
-    if sys_locked:
-        lock_html = (f'<span class="lock on" title="{html.escape(lock.get("sync") or "")}">&#128274; locked by '
-                     f'{html.escape(lock.get("by") or "an admin")}'
-                     f'{", " + html.escape(lock["at"]) if lock.get("at") else ""}</span>')
-        if admin:
-            lock_html += ('<form class="lock" method="post" action="/system/unlock" onsubmit="return confirm('
-                          '\'Unlock System? Its controls work again for every admin.\')"><button>unlock</button></form>')
-    elif admin and aviary_config():
-        lock_html = ('<form class="lock" method="post" action="/system/lock" onsubmit="return confirm('
-                     '\'Lock System? Nobody, admins included, can stop, restart, scale or re-expose a System app, '
-                     'delete a node or change the API key from this page until an admin unlocks it. '
-                     'The gates\\\' admin team is first set to gitea\\\'s site administrators.\')">'
-                     '<button title="lock the System controls">&#128275; lock</button></form>')
-    else:
-        lock_html = ""
+    # The System and Apps headings carry their locks.
+    lock_html = _lock_html("system", admin, "stop, restart, scale or re-expose a System app, delete a node or change the API key")
+    apps_lock_html = _lock_html("apps", admin, "stop, start, restart, scale, re-image or re-expose an app")
     by_ip = {}
     for r in d["routes"]:
         if r[8] or r[4]:  # on no Gateway at all: nothing to resolve it to
@@ -3396,6 +3477,7 @@ def index():
         hosts=html.escape(hosts),
         me=html.escape(me),
         image=_own_image_html(),
+        apps_lock=apps_lock_html,
         rl_css=RL_CSS + IMG_CSS + SW_CSS + (CHAT_CSS if ROOM_ENABLED else ""),
         rl_html=RL_HTML + IMG_HTML,
         chat=_chat_html(d.get("gpus", 0)) if ROOM_ENABLED else "",
@@ -4434,6 +4516,14 @@ def _claude_relay(messages):
     yield b"\n(stopped: too many lookups for one reply)"
 
 
+def _wb_lock_text():
+    """"" if the whiteboard is open, else who locked it and when."""
+    lock = lock_state("whiteboard")
+    if not lock.get("locked"):
+        return ""
+    return f"locked by {lock.get('by') or 'an admin'}" + (f", {lock['at']}" if lock.get("at") else "")
+
+
 def _chat_html(gpus):
     """The whiteboard. The room is always open; with no GPU in the cluster for
     the model to run on, the model is marked away, IRC style (Claude, when it
@@ -4448,6 +4538,8 @@ def _chat_html(gpus):
         ("__RAWNICK__", nick),
         ("__ME__", html.escape(_chat_nick())),
         ("__NONE__", "1" if none else ""),
+        ("__LOCKED__", html.escape(_wb_lock_text())),
+        ("__ADMIN__", "1" if _is_admin() and aviary_config() else ""),
         ("__NICK__", "no model" if none else f"{nick} (away)" if away else nick),
         ("__PLACEHOLDER__", "say something &mdash; no model is listening" if none else
                             f"say something &mdash; {nick} is {'away' if away else 'listening'}"),
@@ -4670,6 +4762,7 @@ def api_chat_poll():
         out = {
             "epoch": _room["epoch"], "rev": _room["rev"], "busy": _room["busy"],
             "nick": chat_nick(), "away": away, "none": chat_is_none(), "hint": _chat_hint(away),
+            "locked": _wb_lock_text(),
             "wiped": _room["wiped"],
             "strokes": [{k: st[k] for k in ("id", "nick", "pts")} for st in _room["strokes"] if st["rev"] > after],
             "msgs": [{k: m[k] for k in ("id", "nick", "text", "bot", "done")}

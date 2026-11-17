@@ -1220,7 +1220,7 @@ CHAT_CSS = """
  #chat form button.model { flex: 0 0 auto; margin-left: 10px; padding: 0; border: 0; background: none; cursor: pointer;
    font: inherit; font-style: italic; color: #4682b4; }
  #chat form button.model:hover { color: #1a4d8f; }
- #chat.off { opacity: .55; filter: grayscale(1); }
+ #chat.away form button.model { color: #999; }
  dialog#md { border: 0; border-radius: 10px; padding: 22px 26px; width: min(620px, 94vw); max-height: 86vh;
    box-shadow: 0 12px 40px rgba(0,0,0,.3); font: 15px/1.4 system-ui, sans-serif; color: #222; }
  dialog#md::backdrop { background: rgba(20,30,45,.45); }
@@ -1241,14 +1241,13 @@ CHAT_CSS = """
  #md .md-pull { min-height: 20px; margin-top: 8px; font-size: 13px; color: #555; }
  #md .md-pull.err { color: #b00020; }
  #md .md-foot { text-align: right; margin-top: 14px; }
- #chat.off input { cursor: not-allowed; }
 """
 
 CHAT_HTML = """
 <section id="chat" class="__CLASS__" aria-label="Chat room" data-hint="__HINT__">
  <div class="chat-log" aria-live="polite"></div>
  <hr>
- <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off" maxlength="4000"__DISABLED__><button type="button" class="model" title="choose or install a model">__NICK__ &#9662;</button></form>
+ <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off" maxlength="4000"><button type="button" class="model" title="choose or install a model">__NICK__ &#9662;</button></form>
 </section>
 <dialog id="md">
  <h3>Model</h3>
@@ -1270,7 +1269,17 @@ CHAT_HTML = """
   if (!box || !window.fetch) return;
   var log = box.querySelector('.chat-log'), form = box.querySelector('form'), inp = form.querySelector('input');
   var rev = 0, epoch = '', rows = {}, busy = false, timer = null;
-  var pick = form.querySelector('button.model'), nick = pick.textContent.replace(/ *\u25be$/, '');
+  var pick = form.querySelector('button.model'), nick = pick.textContent.replace(/ *\u25be$/, '').replace(/ \\(away\\)$/, '');
+  var away = box.classList.contains('away');
+  // The model's presence, IRC style: with no GPU to run on it is away. The
+  // room stays open -- people can still talk to each other.
+  function presence() {
+    box.classList.toggle('away', away);
+    pick.textContent = nick + (away ? ' (away)' : '') + ' \u25be';
+    inp.placeholder = 'say something \u2014 ' + nick + (away ? ' is away' : ' is listening');
+    box.dataset.hint = away ? nick + ' is away: no GPU in the cluster.' : 'Running on the GPU in this cluster.';
+    var h = log.querySelector('.hint'); if (h) h.textContent = box.dataset.hint;
+  }
   function hint() {
     if (log.children.length) return;
     var h = document.createElement('div'); h.className = 'hint'; h.textContent = box.dataset.hint; log.appendChild(h);
@@ -1304,9 +1313,8 @@ CHAT_HTML = """
         if (d.epoch !== epoch) { epoch = d.epoch; rows = {}; log.textContent = ''; stuck = true; }
         d.msgs.forEach(upsert);
         rev = d.rev; busy = d.busy;
-        if (d.nick !== nick) {   // someone switched the model
-          nick = d.nick; pick.textContent = nick + ' \u25be';
-          if (!inp.disabled) inp.placeholder = 'say something \u2014 ' + nick + ' is listening';
+        if (d.nick !== nick || !!d.away !== away) {   // someone switched the model, or it came or went
+          nick = d.nick; away = !!d.away; presence();
         }
         hint();
         if (stuck && d.msgs.length) log.scrollTop = log.scrollHeight;
@@ -2552,18 +2560,16 @@ def _chat_relay(messages, upstream):
 
 
 def _chat_html(gpus):
-    """The chat window, live when the cluster has a GPU for the model to run
-    on, greyed out (input disabled) when it has none."""
+    """The chat window. The room is always open; with no GPU in the cluster
+    for the model to run on, the model is marked away, IRC style."""
     on = gpus > 0
     model, nick = html.escape(chat_model()), html.escape(chat_nick())
     page = CHAT_HTML
     for key, val in (
-        ("__CLASS__", "" if on else "off"),
-        ("__HINT__", "Running on the GPU in this cluster." if on else "No GPU in the cluster."),
-        ("__NICK__", nick),
-        ("__PLACEHOLDER__", f"say something &mdash; {nick} is listening"
-         if on else "no GPU in the cluster"),
-        ("__DISABLED__", "" if on else " disabled"),
+        ("__CLASS__", "" if on else "away"),
+        ("__HINT__", "Running on the GPU in this cluster." if on else f"{nick} is away: no GPU in the cluster."),
+        ("__NICK__", nick if on else f"{nick} (away)"),
+        ("__PLACEHOLDER__", f"say something &mdash; {nick} is {'listening' if on else 'away'}"),
         ("__MODEL__", model),
     ):
         page = page.replace(key, val)
@@ -2616,8 +2622,28 @@ def _chat_error(status, message):
 # names this incarnation of the room: it changes on /clear and on restart, and
 # tells a page to drop what it is showing. In memory only -- which is why the
 # image runs a single gunicorn worker (threads, not processes).
-_room = {"epoch": secrets.token_hex(4), "rev": 0, "next": 1, "msgs": [], "busy": False, "stop": False}
+_room = {"epoch": secrets.token_hex(4), "rev": 0, "next": 1, "msgs": [], "busy": False, "stop": False,
+         "told": False}   # told: the room has been told the model is away
 _roomlock = threading.Lock()
+
+
+def _chat_away(fresh=False):
+    """The model is away when the cluster has no GPU for it to run on. Read
+    from the page's snapshot as it stands (the poll must not wait on a refresh)
+    unless `fresh`."""
+    return not ((snapshot() if fresh else _cache.get("data")) or {}).get("gpus")
+
+
+def _room_presence(away, spoke=False):
+    """The model's comings and goings, as IRC has them (caller holds
+    _roomlock): the first line said to an away model gets one away notice, not
+    one per line, and the model says so when it is back."""
+    if away and spoke and not _room["told"]:
+        _room["told"] = True
+        _room_say("*", f"{chat_nick()} is away: no GPU in the cluster", bot=True)
+    elif not away and _room["told"]:
+        _room["told"] = False
+        _room_say("*", f"{chat_nick()} is back", bot=True)
 
 
 def _room_say(nick, text, bot=False, done=True):
@@ -2691,12 +2717,14 @@ def api_chat_poll():
         after = int(request.query.get("after", "0"))
     except ValueError:
         after = 0
+    away = _chat_away()
     with _roomlock:
+        _room_presence(away)
         if request.query.get("epoch", "") != _room["epoch"]:
             after = 0
         out = {
             "epoch": _room["epoch"], "rev": _room["rev"], "busy": _room["busy"],
-            "nick": chat_nick(),
+            "nick": chat_nick(), "away": away,
             "msgs": [{k: m[k] for k in ("id", "nick", "text", "bot", "done")}
                      for m in _room["msgs"] if m["rev"] > after],
         }
@@ -2759,7 +2787,7 @@ def api_chat_pull():
 @app.route("/api/chat", method="POST")
 def api_chat():
     """Say something in the room. It shows for everyone under the speaker's
-    name, and the model answers. /clear empties the room; /stop cuts the
+    name, and the model answers (unless it is away: no GPU). /clear empties the room; /stop cuts the
     model's current reply short. Errors are plain text for the page to show."""
     if not CHAT_ENABLED:
         return _chat_error(404, "chat is not configured\n")
@@ -2776,15 +2804,16 @@ def api_chat():
         return "ok\n"
     if text == "/clear":
         with _roomlock:
-            _room.update(epoch=secrets.token_hex(4), msgs=[], stop=True)
+            _room.update(epoch=secrets.token_hex(4), msgs=[], stop=True, told=False)
             _room["rev"] += 1
         return "ok\n"
-    if not snapshot().get("gpus"):
-        return _chat_error(503, "there is no GPU in the cluster for the model to run on\n")
+    away = _chat_away(fresh=True)
     with _roomlock:
+        _room_presence(away)
         _room_say(_chat_nick(), text)
-        start = not _room["busy"]
-        _room["busy"] = True
+        _room_presence(away, spoke=True)
+        start = not away and not _room["busy"]
+        _room["busy"] = _room["busy"] or start
     if start:
         threading.Thread(target=_room_reply, daemon=True).start()
     return "ok\n"

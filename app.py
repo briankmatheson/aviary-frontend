@@ -620,7 +620,8 @@ def metrics():
         }
     except Exception:
         pass
-    return {"cpu": cpu, "mem": mem, "disk": disk,
+    cpu_peak, mem_peak = app_peaks(cpu, mem)
+    return {"cpu": cpu, "mem": mem, "disk": disk, "cpu_peak": cpu_peak, "mem_peak": mem_peak,
             "cpu_max": cpu_max, "mem_max": mem_max, "unset": unset, "tuned": tuned}
 
 
@@ -896,19 +897,52 @@ def app_limits():
     return cpu, mem, unset
 
 
-def _prom(expr):
-    """{nodename: float} for a Prometheus instant query, keyed by the series'
-    nodename label. {} on any error so the caller degrades to '-'."""
+def _prom(expr, by="nodename"):
+    """{label value: float} for a Prometheus instant query, keyed by the
+    series' `by` label (the node's name unless told otherwise). {} on any
+    error so the caller degrades to '-'."""
     url = f"{PROMETHEUS_URL}/api/v1/query?query=" + urllib.parse.quote(expr)
     try:
         with urllib.request.urlopen(url, timeout=5) as r:
             data = json.loads(r.read().decode())
         return {
-            s["metric"].get("nodename", ""): float(s["value"][1])
+            s["metric"].get(by, ""): float(s["value"][1])
             for s in data.get("data", {}).get("result", [])
         }
     except Exception:
         return {}
+
+
+# High-water marks: the most CPU and memory each app (namespace) has used.
+# Prometheus is asked for the peak over PEAK_WINDOW every few minutes, so the
+# marks survive a restart of this page; in between, and without Prometheus,
+# they are the most this process has seen. A mark is never below what is in
+# use right now.
+PEAK_WINDOW = os.environ.get("PEAK_WINDOW", "7d")
+_peak = {"at": 0.0, "cpu": {}, "mem": {}}
+_peaklock = threading.Lock()
+
+
+def app_peaks(cpu, mem):
+    """({namespace: cores}, {namespace: bytes}) high-water marks, raised by the
+    current figures `cpu` and `mem` (as metrics() has them)."""
+    with _peaklock:
+        if PROMETHEUS_URL and time.time() - _peak["at"] > 300:
+            _peak["at"] = time.time()
+            pods = 'container!="",container!="POD"'
+            asked = (
+                ("cpu", f"max_over_time((sum by (namespace) (rate(container_cpu_usage_seconds_total{{{pods}}}[5m])))[{PEAK_WINDOW}:5m])"),
+                ("mem", f"max_over_time((sum by (namespace) (container_memory_working_set_bytes{{{pods}}}))[{PEAK_WINDOW}:5m])"),
+            )
+            for key, expr in asked:
+                for ns, v in _prom(expr, by="namespace").items():
+                    if ns and v > _peak[key].get(ns, 0):
+                        _peak[key][ns] = v
+        for key, now in (("cpu", cpu), ("mem", mem)):
+            for ns, v in now.items():
+                if v > _peak[key].get(ns, 0):
+                    _peak[key][ns] = v
+        return dict(_peak["cpu"]), dict(_peak["mem"])
 
 
 def node_disk_io():
@@ -1799,6 +1833,8 @@ PAGE = """<!doctype html>
  /* A fixed width, not a minimum: the heading line and the rows must agree, and
     a heading ("Disk Tput") is wider than most values. */
  ul.menu li .stat {{ text-align: right; flex: 0 0 76px; width: 76px; }}
+ ul.menu li .stat.wide {{ flex-basis: 128px; width: 128px; }}
+ ul.menu li .stat b i {{ font-style: normal; font-weight: 400; font-size: 12px; color: #888; white-space: nowrap; }}
  ul.menu li .stat b {{ display: block; font-size: 15px; color: #333; font-weight: 600; font-variant-numeric: tabular-nums; }}
  ul.menu li .stat span {{ font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: .5px; white-space: nowrap; }}
  ul.menu li .act {{ flex: 0 0 auto; margin: 0; width: 34px; text-align: center; }}
@@ -2146,7 +2182,7 @@ def _menu_head(shown, switches):
     a row so each heading sits over its column. `shown` is the exposure
     switches the rows carry; the System list has their columns but no
     switches, so no headings for them (switches=False)."""
-    stats = "".join(f'<div class="stat"><span>{t}</span></div>'
+    stats = "".join(f'<div class="stat{" wide" if t in ("CPU", "Memory") else ""}"><span>{t}{" now / max" if t in ("CPU", "Memory") else ""}</span></div>'
                     for t in ("CPU", "Memory", "Disk Cap", "Disk Tput", "Disk IOPS"))
     sw = "".join(f'<div class="sw"><span>{key if switches else ""}</span></div>' for key, _ in shown)
     return (f'<li class="head" aria-hidden="true"><div class="app"></div><div class="stats">{stats}</div>'
@@ -2221,8 +2257,13 @@ def index():
         cpu = _hcpu(m["cpu"][ns]) if ns in m["cpu"] else "-"
         disk = _hbytes(m["disk"][ns]) if ns in m["disk"] else "-"
         mem_top, cpu_top = m["mem_max"].get(ns), m["cpu_max"].get(ns)
-        mem_heat = _heat(_frac(m["mem"].get(ns), mem_top), f"of {_hbytes(mem_top)} max" if mem_top else "")
-        cpu_heat = _heat(_frac(m["cpu"].get(ns), cpu_top), f"of {_hcpu(cpu_top)} max" if cpu_top else "")
+        mem_heat = _heat(_frac(m["mem"].get(ns), mem_top), f"limit {_hbytes(mem_top)}" if mem_top else "")
+        cpu_heat = _heat(_frac(m["cpu"].get(ns), cpu_top), f"limit {_hcpu(cpu_top)}" if cpu_top else "")
+        # now / high-water mark: the most the app has been seen to use.
+        mem_hi, cpu_hi = m.get("mem_peak", {}).get(ns), m.get("cpu_peak", {}).get(ns)
+        hi = '<i title="the most it has used (high-water mark)"> / {}</i>'
+        mem_hi = hi.format(_hbytes(mem_hi)) if mem_hi and ns in m["mem"] else ""
+        cpu_hi = hi.format(_hcpu(cpu_hi)) if cpu_hi and ns in m["cpu"] else ""
         gaps = m["unset"].get(ns)
         warn = ""
         if gaps:
@@ -2310,8 +2351,8 @@ def index():
                if l4 or label in NOWEB else f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>') +
             f"<small>{html.escape(blurb)}</small></div>"
             f'<div class="stats">'
-            f'<div class="stat"><b{cpu_heat}>{cpu}</b></div>'
-            f'<div class="stat"><b{mem_heat}>{mem}</b></div>'
+            f'<div class="stat wide"><b{cpu_heat}>{cpu}{cpu_hi}</b></div>'
+            f'<div class="stat wide"><b{mem_heat}>{mem}{mem_hi}</b></div>'
             f'<div class="stat"><b>{disk}</b></div>'
             f'<div class="stat"><b>&mdash;</b></div>'
             f'<div class="stat"><b>&mdash;</b></div>'

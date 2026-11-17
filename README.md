@@ -28,6 +28,10 @@ The rows of each list can be dragged into another order. The order is each
 person's own, kept per gitea login in the `aviary-menu-order` ConfigMap
 (`MENU_ORDER_CONFIGMAP`), so it follows them to any browser.
 
+CPU and memory read `now / max`: what an app is using, and its high-water mark
+(the peak over `PEAK_WINDOW`, default `7d`, from Prometheus when
+`PROMETHEUS_URL` is set; otherwise the most seen since this page started).
+
 Each app row ends in two switches, **private** and **public**: they attach
 the app's `HTTPRoute` to, or detach it from, the internal Gateway (`aviary`)
 and the NATed one (`aviary-nat`, aviary-deploy's `nat_gateway_ip`). System

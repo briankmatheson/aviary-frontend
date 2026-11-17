@@ -1174,8 +1174,10 @@ def _purge_history(ns, rel):
 
 
 def _bump():
+    """Something was just changed: the snapshot in hand no longer shows it."""
     with _lock:
-        _cache["at"] = 0.0
+        _cache["stale"] = True
+        _cache["gen"] = _cache.get("gen", 0) + 1
 
 
 def _fortune():
@@ -1208,20 +1210,58 @@ def ca_pem():
     return base64.b64decode(data).decode() if data else None
 
 
+SNAPSHOT_TTL = 15       # seconds a snapshot is served before a new one is fetched
+SNAPSHOT_WAIT = 2.5     # after something was changed, how long a page waits for the new one
+_building = threading.Lock()   # one rebuild at a time; _lock only guards _cache itself
+
+
+def _snapshot_build():
+    gws = gateways()
+    return {
+        "gateways": gws,
+        "routes": routes(gws),
+        "l4": l4_routes(gws),
+        "nodes": nodes(),
+        "metrics": metrics(),
+        "releases": releases(),
+        "gpus": gpu_count() if CHAT_ENABLED else 0,
+    }
+
+
+def _snapshot_refresh():
+    """Fetch a new snapshot unless someone just did. It takes seconds (the
+    cluster's API, Prometheus, helm), so it runs with no lock on the cache:
+    pages keep being served from the one in hand meanwhile."""
+    with _building:
+        with _lock:
+            gen = _cache.get("gen", 0)
+            if _cache["data"] is not None and not _cache.get("stale") and time.time() - _cache["at"] <= SNAPSHOT_TTL:
+                return
+        data = _snapshot_build()
+        with _lock:
+            _cache["data"], _cache["at"] = data, time.time()
+            # Changed again while this was being fetched: it may predate that.
+            _cache["stale"] = _cache.get("gen", 0) != gen
+
+
 def snapshot():
+    """The page's view of the cluster. Served from the copy in hand; when that
+    is older than SNAPSHOT_TTL a new one is fetched in the background, so
+    nobody waits for it. Two exceptions: the very first one has to be waited
+    for, and right after something was changed here (_bump) the page gives the
+    new one a moment (SNAPSHOT_WAIT), so the change usually shows at once and
+    otherwise on the next load."""
     with _lock:
-        if time.time() - _cache["at"] > 15:
-            gws = gateways()
-            _cache["data"] = {
-                "gateways": gws,
-                "routes": routes(gws),
-                "l4": l4_routes(gws),
-                "nodes": nodes(),
-                "metrics": metrics(),
-                "releases": releases(),
-                "gpus": gpu_count() if CHAT_ENABLED else 0,
-            }
-            _cache["at"] = time.time()
+        data, stale = _cache["data"], _cache.get("stale")
+        old = time.time() - _cache["at"] > SNAPSHOT_TTL
+    if data is None:
+        _snapshot_refresh()
+    elif stale or (old and not _building.locked()):
+        t = threading.Thread(target=_snapshot_refresh, daemon=True)
+        t.start()
+        if stale:
+            t.join(SNAPSHOT_WAIT)
+    with _lock:
         return _cache["data"]
 
 

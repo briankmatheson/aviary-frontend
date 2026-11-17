@@ -305,6 +305,24 @@ number changed, restarts if ticked, and returns to the page.
 For an app installed by Helm, a later Helm upgrade puts the chart's own pod
 counts back.
 
+Details of the dialog worth knowing:
+
+- **Apply is grey until the figures have loaded**, and goes grey again,
+  reading **Applying…**, once pressed. Applying with a restart can take a
+  while; the page reloads when it is done.
+- **restart now** sits beside Apply. Ticked, every workload is rolled so
+  running pods pick up the new requests and limits; unticked, they apply
+  to pods started from then on.
+- Each of **CPU** and **Memory** shows two pairs of figures: **app** (the
+  whole app, now and high-water, the same numbers as on its tile) and
+  **busiest container** (one container, now and high-water; the red line).
+  They differ because a limit is per container while the tile adds up
+  every container.
+- A workload that **cannot run more than one pod is greyed out**, with the
+  reason under its name: either its pods would share a volume only one of
+  them can attach, or something else (an operator) sets its number. The
+  server refuses more than one pod for these as well.
+
 ### 6.2 The Images dialog
 
 Title: **Images: <app>**. Lists every workload in the app and the container

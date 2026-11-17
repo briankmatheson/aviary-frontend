@@ -441,7 +441,7 @@ def nodes():
     rootfs = node_root_fs()
     rows = []
     for n in v1.list_node().items:
-        ready = next((c.status for c in n.status.conditions if c.type == "Ready"), "Unknown")
+        ready = _node_ready(n)
         roles = ",".join(
             k.split("/", 1)[1] for k in n.metadata.labels if k.startswith("node-role.kubernetes.io/")
         ) or "worker"
@@ -463,8 +463,55 @@ def nodes():
             n.metadata.name, roles, ready, n.status.node_info.kubelet_version,
             cpu, mem, dcap, tput, iops_s,
             fcpu, fmem, _frac(used, size), _logfrac(bps, peak_bps), _logfrac(iops, peak_iops),
+            _node_dead(n),
         ))
     return rows
+
+
+def _node_ready(n):
+    return next((c.status for c in (n.status.conditions or []) if c.type == "Ready"), "Unknown")
+
+
+def _node_dead(n):
+    """A node the page offers to delete: not Ready, and not a control-plane
+    node (removing one of those takes its etcd member with it: not a button)."""
+    control = any(k in (n.metadata.labels or {}) for k in (
+        "node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master"))
+    return _node_ready(n) != "True" and not control
+
+
+def delete_dead_node(name):
+    """Clear a dead node out of the cluster: force-delete the pods still bound
+    to it (they sit in Terminating for ever, their kubelet being gone), drop its
+    VolumeAttachments so the volumes can attach elsewhere, then delete the Node
+    (its lease goes with it). Checked against the live API, not the page's
+    cache: a node that is Ready, or a control-plane node, is refused.
+    Returns (pods, attachments) removed."""
+    v1 = client.CoreV1Api()
+    n = v1.read_node(name)
+    if not _node_dead(n):
+        raise ValueError("Ready or control-plane: not deleting")
+    gone = lambda e: e.status == 404
+    pods = attachments = 0
+    for p in v1.list_pod_for_all_namespaces(field_selector=f"spec.nodeName={name}").items:
+        try:
+            v1.delete_namespaced_pod(p.metadata.name, p.metadata.namespace, grace_period_seconds=0)
+            pods += 1
+        except client.exceptions.ApiException as e:
+            if not gone(e):
+                raise
+    storage = client.StorageV1Api()
+    for a in storage.list_volume_attachment().items:
+        if a.spec.node_name != name:
+            continue
+        try:
+            storage.delete_volume_attachment(a.metadata.name)
+            attachments += 1
+        except client.exceptions.ApiException as e:
+            if not gone(e):
+                raise
+    v1.delete_node(name)
+    return pods, attachments
 
 
 _SUFFIX = {"n": 1e-9, "u": 1e-6, "m": 1e-3, "": 1, "k": 1e3, "Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40, "K": 1e3, "M": 1e6, "G": 1e9}
@@ -1133,7 +1180,7 @@ def nodes_snapshot():
         return _ncache["data"]
 
 
-def _node_rows_html(rows):
+def _node_rows_html(rows, admin=True):
     """The <tbody> for the node table; also served on its own at /api/nodes so
     the page can refresh it in place without a full reload."""
     return "".join(
@@ -1142,9 +1189,18 @@ def _node_rows_html(rows):
         f"<td>{html.escape(v)}</td>"
         f"<td{_heat(fcpu)}>{cpu}</td><td{_heat(fmem)}>{mem}</td>"
         f"<td{_heat(fdcap)}>{html.escape(dcap)}</td>"
-        f"<td{_heat(ftput)}>{html.escape(tput)}</td><td{_heat(fiops)}>{html.escape(iops)}</td></tr>"
-        for n, r, ready, v, cpu, mem, dcap, tput, iops, fcpu, fmem, fdcap, ftput, fiops in rows
+        f"<td{_heat(ftput)}>{html.escape(tput)}</td><td{_heat(fiops)}>{html.escape(iops)}</td>"
+        f"<td>{_node_delete_html(n) if dead and admin else ''}</td></tr>"
+        for n, r, ready, v, cpu, mem, dcap, tput, iops, fcpu, fmem, fdcap, ftput, fiops, dead in rows
     )
+
+
+def _node_delete_html(name):
+    """The delete button on a dead node's row. The page script asks before it
+    posts (the table body is re-fetched, so the handler sits on the table)."""
+    q = html.escape(urllib.parse.quote(name, safe=""))
+    return (f'<form class="nodedel" method="post" action="/node/{q}/delete" data-node="{html.escape(name)}">'
+            f'<button title="Remove this dead node, its stuck pods and its volume attachments">delete</button></form>')
 
 
 RL_CSS = """
@@ -1750,6 +1806,10 @@ PAGE = """<!doctype html>
                 font-size: 13px; color: #555; font-style: italic; white-space: pre-wrap; }}
  .heat {{ font-weight: 600; font-variant-numeric: tabular-nums; }}
  .ok {{ color: #1b7f3b; }} .bad {{ color: #b00020; }}
+ form.nodedel {{ margin: 0; }}
+ form.nodedel button {{ cursor: pointer; font-size: 12px; padding: 2px 9px; border-radius: 6px;
+   border: 1px solid #b00020; background: #fff; color: #b00020; }}
+ form.nodedel button:hover {{ background: #b00020; color: #fff; }}
  footer {{ margin-top: 48px; color: #888; font-size: 13px; }}
 {rl_css}{splash_css}</style></head><body>{splash_html}<main>
 <div class="hdr">
@@ -1762,7 +1822,7 @@ PAGE = """<!doctype html>
 <ul class="menu">{menu_head}{menu}</ul>
 {system}
 <h2>Cluster</h2>
-<table id="nodes"><thead><tr><th>Node</th><th>Role</th><th>Ready</th><th>Kubelet</th><th>CPU</th><th>Memory</th><th>Disk Cap</th><th>Disk Tput</th><th>Disk IOPS</th></tr></thead><tbody id="noderows">{nodes}</tbody></table>
+<table id="nodes"><thead><tr><th>Node</th><th>Role</th><th>Ready</th><th>Kubelet</th><th>CPU</th><th>Memory</th><th>Disk Cap</th><th>Disk Tput</th><th>Disk IOPS</th><th></th></tr></thead><tbody id="noderows">{nodes}</tbody></table>
 <h2>/etc/hosts</h2>
 <p>If your resolver does not know these names:</p>
 <pre>{hosts}</pre>
@@ -1779,10 +1839,20 @@ PAGE = """<!doctype html>
 (function () {{
   var tb = document.getElementById('noderows');
   if (!tb) return;
+  // Only swap when the rows changed, so a delete button is not replaced
+  // under the pointer between press and release.
+  var last = null;
+  // A dead node's delete button: ask first. Delegated, since rows come and go.
+  tb.addEventListener('submit', function (e) {{
+    var f = e.target;
+    if (f.classList && f.classList.contains('nodedel') &&
+        !confirm('Delete node ' + f.dataset.node + '?\\n\\nIts pods are force-deleted and its volume attachments removed. Only do this if the machine is really gone.'))
+      e.preventDefault();
+  }});
   function tick() {{
     fetch('/api/nodes', {{ credentials: 'same-origin' }})
       .then(function (r) {{ return r.ok ? r.text() : Promise.reject(r.status); }})
-      .then(function (h) {{ tb.innerHTML = h; }})
+      .then(function (h) {{ if (h !== last) {{ tb.innerHTML = h; last = h; }} }})
       .catch(function () {{}})
       .finally(function () {{ setTimeout(tick, 200); }});
   }}
@@ -2074,7 +2144,7 @@ def index():
             system_items.insert(0, row)
         else:
             (system_items if is_system else items).append(row)
-    nodes_html = _node_rows_html(d["nodes"])
+    nodes_html = _node_rows_html(d["nodes"], admin)
     by_ip = {}
     for r in d["routes"]:
         if r[8] or r[4]:  # on no Gateway at all: nothing to resolve it to
@@ -2118,7 +2188,7 @@ def api_nodes():
     """The node table body, for the page's live refresh. Gated like the rest of
     the app (not a public path), so the browser's session cookie carries in."""
     response.content_type = "text/html; charset=utf-8"
-    return _node_rows_html(nodes_snapshot())
+    return _node_rows_html(nodes_snapshot(), _is_admin())
 
 
 # Which model the room talks to. It starts as CHAT_MODEL; the model menu can
@@ -3013,6 +3083,24 @@ def app_image_set(ns):
         {"op": "replace", "path": f"{base}/image", "value": f"{IMAGE_REGISTRY}/{mesh[0]}:{tag}"},
     ])
     _bump()
+    redirect("/")
+
+
+@app.route("/node/<name>/delete", method="POST")
+def node_delete(name):
+    """The delete button on a dead node: clean it out of the cluster. For
+    admins, like the System entries: nobody else is shown the button."""
+    if not _is_admin():
+        raise HTTPError(403, "deleting a node is for admins\n")
+    try:
+        delete_dead_node(name)
+    except ValueError as e:
+        raise HTTPError(409, f"node {name}: {e}\n")
+    except client.exceptions.ApiException as e:
+        raise HTTPError(404 if e.status == 404 else 502, f"node {name}: {e.reason}\n")
+    _bump()
+    with _nlock:
+        _ncache["at"] = 0.0
     redirect("/")
 
 

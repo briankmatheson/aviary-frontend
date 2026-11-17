@@ -578,7 +578,9 @@ def _heat(frac, title=""):
     if frac is None:
         return ""
     t = f' title="{html.escape(title)}"' if title else ""
-    return f' class="heat" style="color:hsl({240 * (1 - frac):.0f},90%,38%)"{t}'
+    # The hue goes out as a variable; the stylesheet turns it into a colour,
+    # so the dark page can use its own (blue is unreadable on black).
+    return f' class="heat" style="--h:{240 * (1 - frac):.0f}"{t}'
 
 
 def _hbytes(n):
@@ -1913,7 +1915,8 @@ RL_HTML = """
       // (with no limit, to the top of the scale).
       var fill = row.querySelector('.rl-fill'), f = Math.min(1, d.usage / (none ? d.top : l));
       fill.style.width = pos(d.usage) / 10 + '%';
-      fill.style.background = 'hsl(' + Math.round(240 * (1 - f)) + ',85%,55%)';
+      fill.style.background = document.documentElement.dataset.theme === 'dark'
+        ? 'hsl(' + Math.round(187 * (1 - f)) + ',95%,58%)' : 'hsl(' + Math.round(240 * (1 - f)) + ',85%,55%)';
       // Whichever thumb is nearer the pointer's side stays on top when they meet.
       lo.style.zIndex = +lo.value > 500 ? 3 : 2; hi.style.zIndex = +lo.value > 500 ? 2 : 3;
     }
@@ -2198,8 +2201,9 @@ DARK_CSS = """
  html[data-theme=dark] ul.menu li .stat b { color: #e6fbff; }
  html[data-theme=dark] ul.menu li .stat b i, html[data-theme=dark] ul.menu li .stat span,
  html[data-theme=dark] ul.menu li .sw span { color: #6f9aa1; }
- /* The heat colours are set inline for a light page: lift them off black. */
- html[data-theme=dark] .heat { filter: brightness(1.75) saturate(1.15); }
+ /* Heat on black: the same sweep squeezed to run cyan (idle) through green
+    and yellow to red (full), and lighter. Blue itself is too dark to read. */
+ html[data-theme=dark] .heat, html[data-theme=dark] ul.menu li .stat b.heat { color: hsl(calc(var(--h) * .78), 95%, 62%); }
  html[data-theme=dark] ul.menu li .act button { border-color: #17505c; background: #04141a; color: #8fd6e0; }
  html[data-theme=dark] ul.menu li .act.stop button:hover { background: #2a0a10; border-color: #ff6b7a; color: #ff6b7a; }
  html[data-theme=dark] ul.menu li .act.start button:hover { background: #072a14; border-color: #4ade80; color: #4ade80; }
@@ -2354,6 +2358,8 @@ PAGE = """<!doctype html>
  pre.fortune {{ border-left: 3px solid #4682b4; padding: 10px 14px; margin: 8px 0 0;
                 font-size: 13px; color: #555; font-style: italic; white-space: pre-wrap; }}
  .heat {{ font-weight: 600; font-variant-numeric: tabular-nums; }}
+ /* (spelled out for the tiles too: their own colour rule would outweigh .heat) */
+ .heat, ul.menu li .stat b.heat {{ color: hsl(var(--h), 90%, 38%); }}
  .ok {{ color: #1b7f3b; }} .bad {{ color: #b00020; }}
  form.nodedel {{ margin: 0; }}
  form.nodedel button {{ cursor: pointer; font-size: 12px; padding: 2px 9px; border-radius: 6px;

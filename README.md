@@ -35,7 +35,7 @@ has installed, or install another by name (`llama3.3:70b`,
 `hf.co/user/repo:Q4_K_M`). The choice is kept in the `aviary-chat` ConfigMap
 (`CHAT_STATE_CONFIGMAP`). The transcript is kept
 in memory, so the app runs as a single gunicorn worker and a restart empties
-the room. With no GPU in the cluster the room is greyed out.
+the room. With no GPU in the cluster the room stays open and the model is marked away, IRC style.
 
 The model can look things up while it answers. `kubernetes_get` reads the
 cluster's API with a token for the `CHAT_SERVICE_ACCOUNT` ServiceAccount

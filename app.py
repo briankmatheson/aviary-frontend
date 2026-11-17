@@ -1778,6 +1778,9 @@ PAGE = """<!doctype html>
  ul.menu li {{ display: flex; align-items: center; gap: 18px; padding: 12px 16px; background: rgba(255,255,255,.85);
                border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.08); transition: background .1s; }}
  ul.menu li:hover {{ background: #fffbe6; }}
+ ul.menu li.dragging {{ opacity: .4; }}
+ ul.menu li.drop-above {{ box-shadow: 0 -3px 0 #4682b4; }}
+ ul.menu li.drop-below {{ box-shadow: 0 3px 0 #4682b4; }}
  ul.menu li.head, ul.menu li.head:hover {{ background: none; box-shadow: none; padding-top: 0; padding-bottom: 0;
                                           margin-bottom: -4px; }}
  ul.menu li.off, ul.menu li.locked {{ opacity: .55; filter: grayscale(1); }}
@@ -1827,7 +1830,7 @@ PAGE = """<!doctype html>
 <h1>Aviary</h1>
 <div class="top"><div class="top-l">{fortune}</div>{chat}</div>
 <h2>Apps</h2>
-<ul class="menu">{menu_head}{menu}</ul>
+<ul class="menu" data-list="apps">{menu_head}{menu}</ul>
 {system}
 <h2>Cluster</h2>
 <table id="nodes"><thead><tr><th>Node</th><th>Role</th><th>Ready</th><th>Kubelet</th><th>CPU</th><th>Memory</th><th>Disk Cap</th><th>Disk Tput</th><th>Disk IOPS</th><th></th></tr></thead><tbody id="noderows">{nodes}</tbody></table>
@@ -1844,6 +1847,48 @@ PAGE = """<!doctype html>
 // response can't let requests pile up. Silent on error so a transient blip just
 // leaves the last-good rows on screen.
 // (Braces are doubled because this page is rendered with str.format().)
+// Menu tiles can be dragged into another order, within their own list. The
+// order is this person's own and is saved as soon as a tile is dropped.
+(function () {{
+  var moving = null;
+  function clear(ul) {{
+    ul.querySelectorAll('.drop-above, .drop-below').forEach(function (x) {{ x.classList.remove('drop-above', 'drop-below'); }});
+  }}
+  document.querySelectorAll('ul.menu[data-list]').forEach(function (ul) {{
+    ul.addEventListener('dragstart', function (e) {{
+      var li = e.target.closest && e.target.closest('li[data-key]');
+      if (!li || li.parentNode !== ul) return;
+      moving = li;
+      li.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', li.dataset.key);
+    }});
+    ul.addEventListener('dragover', function (e) {{
+      var li = e.target.closest && e.target.closest('li[data-key]');
+      if (!moving || moving.parentNode !== ul || !li || li === moving) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      var r = li.getBoundingClientRect(), below = e.clientY > r.top + r.height / 2;
+      clear(ul);
+      li.classList.add(below ? 'drop-below' : 'drop-above');
+    }});
+    ul.addEventListener('drop', function (e) {{
+      var li = e.target.closest && e.target.closest('li[data-key]');
+      if (!moving || moving.parentNode !== ul || !li || li === moving) return;
+      e.preventDefault();
+      var r = li.getBoundingClientRect();
+      ul.insertBefore(moving, e.clientY > r.top + r.height / 2 ? li.nextSibling : li);
+      var order = Array.prototype.map.call(ul.querySelectorAll('li[data-key]'), function (x) {{ return x.dataset.key; }});
+      fetch('/api/menu/order', {{ method: 'POST', credentials: 'same-origin', headers: {{ 'Content-Type': 'application/json' }},
+                                 body: JSON.stringify({{ list: ul.dataset.list, order: order }}) }}).catch(function () {{}});
+    }});
+    ul.addEventListener('dragend', function () {{
+      if (moving) moving.classList.remove('dragging');
+      moving = null;
+      clear(ul);
+    }});
+  }});
+}})();
 (function () {{
   var tb = document.getElementById('noderows');
   if (!tb) return;
@@ -2258,7 +2303,8 @@ def index():
                 f"</form>"
             )
         row = (
-            f'<li class="{"locked" if locked else "off" if off else ""}"><div class="app">'
+            f'<li class="{"locked" if locked else "off" if off else ""}" data-key="{html.escape(label)}" draggable="true">'
+            f'<div class="app">'
             + (f'<span class="noweb" title="for admins">{html.escape(label)}</span>' if locked else
                f'<span class="noweb" title="not a web page: {html.escape(svc)} port {port}">{html.escape(label)}</span>'
                if l4 or label in NOWEB else f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>') +
@@ -2273,9 +2319,9 @@ def index():
         )
         system_switches = system_switches or (is_system and l4)
         if me_too:
-            system_items.insert(0, row)
+            system_items.insert(0, (label, row))
         else:
-            (system_items if is_system else items).append(row)
+            (system_items if is_system else items).append((label, row))
     nodes_html = _node_rows_html(d["nodes"], admin)
     by_ip = {}
     for r in d["routes"]:
@@ -2293,6 +2339,9 @@ def index():
         )
     else:
         auth_nav = ""
+    saved = menu_order(_chat_nick())
+    items = _arranged(items, saved.get("apps"))
+    system_items = _arranged(system_items, saved.get("system"))
     return PAGE.format(
         host=html.escape(os.environ.get("BASE_DOMAIN", "")),
         ca_name=html.escape(CA_FILENAME),
@@ -2301,7 +2350,7 @@ def index():
         menu="".join(items),
         menu_head=_menu_head(shown, True) if items else "",
         system=(
-            f'<h2>System</h2>\n<ul class="menu">{_menu_head(shown, system_switches)}{"".join(system_items)}</ul>'
+            f'<h2>System</h2>\n<ul class="menu" data-list="system">{_menu_head(shown, system_switches)}{"".join(system_items)}</ul>'
             if system_items else ""
         ),
         nodes=nodes_html,
@@ -2350,6 +2399,64 @@ def chat_nick(model=None):
         return CHAT_NICK
     m = re.match(r"[A-Za-z]+", model.rsplit("/", 1)[-1])
     return m.group(0).lower() if m else "bot"
+
+
+# Each person's own order for the menu tiles. Kept in a ConfigMap (one key per
+# gitea login) so it follows them to any browser and outlives a restart; held
+# in memory once read (the app is a single worker).
+MENU_ORDER_CONFIGMAP = os.environ.get("MENU_ORDER_CONFIGMAP", "aviary-menu-order")
+_orders = {"loaded": False, "data": {}}
+_orderlock = threading.Lock()
+
+
+def _order_key(user):
+    """ConfigMap key for a login: its safe characters only."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", user or "guest")[:200] or "guest"
+
+
+def menu_order(user):
+    """{"apps": [label, ...], "system": [...]} as `user` last arranged them
+    (either may be missing: the default order)."""
+    with _orderlock:
+        if not _orders["loaded"]:
+            _orders["loaded"] = True
+            try:
+                cm = client.CoreV1Api().read_namespaced_config_map(MENU_ORDER_CONFIGMAP, self_namespace())
+                for k, v in (cm.data or {}).items():
+                    try:
+                        _orders["data"][k] = json.loads(v)
+                    except ValueError:
+                        pass
+            except Exception:
+                pass  # none saved yet
+        got = _orders["data"].get(_order_key(user))
+        return got if isinstance(got, dict) else {}
+
+
+def menu_order_set(user, which, order):
+    """Remember `user`'s order for one of the lists."""
+    key = _order_key(user)
+    with _orderlock:
+        mine = dict(_orders["data"].get(key) or {})
+        mine[which] = order
+        _orders["data"][key] = mine
+        value = json.dumps(mine, separators=(",", ":"))
+    v1, ns = client.CoreV1Api(), self_namespace()
+    try:
+        v1.patch_namespaced_config_map(MENU_ORDER_CONFIGMAP, ns, {"data": {key: value}})
+    except client.exceptions.ApiException as e:
+        if e.status != 404:
+            raise
+        v1.create_namespaced_config_map(ns, {"apiVersion": "v1", "kind": "ConfigMap",
+                                            "metadata": {"name": MENU_ORDER_CONFIGMAP, "namespace": ns},
+                                            "data": {key: value}})
+
+
+def _arranged(rows, order):
+    """rows [(label, html)] in the saved order; anything not in it (a new app)
+    keeps its place after those."""
+    rank = {k: i for i, k in enumerate(order or [])}
+    return [h for _, (k, h) in sorted(enumerate(rows), key=lambda e: (rank.get(e[1][0], len(rank)), e[0]))]
 
 
 def _chat_choose(model):
@@ -3120,6 +3227,24 @@ def api_chat():
         _room["busy"] = _room["busy"] or start
     if start:
         threading.Thread(target=_room_reply, daemon=True).start()
+    return "ok\n"
+
+
+@app.route("/api/menu/order", method="POST")
+def api_menu_order():
+    """Save the order someone dragged one of the menu lists into: theirs alone."""
+    try:
+        body = request.json or {}
+    except Exception:
+        body = {}
+    which, order = body.get("list"), body.get("order")
+    if which not in ("apps", "system") or not isinstance(order, list) or len(order) > 300 \
+            or not all(isinstance(k, str) and 0 < len(k) <= 100 for k in order):
+        raise HTTPError(400, 'need {"list": "apps"|"system", "order": [...]}\n')
+    try:
+        menu_order_set(_chat_nick(), which, order)
+    except client.exceptions.ApiException as e:
+        raise HTTPError(502, f"could not save the order: {e.reason}\n")
     return "ok\n"
 
 

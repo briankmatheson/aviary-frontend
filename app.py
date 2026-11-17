@@ -1976,6 +1976,12 @@ def _auth_gate():
     # login behind the back of the one already under way.
     if request.method == "GET" and not request.path.startswith("/api/") \
             and request.get_header("Sec-Fetch-Mode", "navigate") == "navigate":
+        # A newcomer (or someone who logged out) gets our own front page, with
+        # a sign-in button, rather than being dropped on gitea's login. Someone
+        # whose session just ran out goes straight back through gitea, which is
+        # a redirect nobody notices while gitea is still signed in.
+        if request.path == "/" and not request.get_cookie("aviary_seen"):
+            return
         redirect("/login")
     raise HTTPError(401, "authentication required\n")
 
@@ -2032,6 +2038,9 @@ def oauth_callback():
         raise HTTPError(403, f"{username} is not an admin")
     response.delete_cookie("oauth_state", path="/")
     response.delete_cookie("oauth_retry", path="/")
+    # Marks a browser that has logged in here (nothing more): see _auth_gate.
+    response.set_cookie("aviary_seen", "1", httponly=True, secure=True, samesite="lax",
+                        max_age=30 * 86400, path="/")
     session = {"u": username, "a": bool(_gitea_admin(user, access)), "x": int(time.time()) + SESSION_SECONDS}
     response.set_cookie("aviary_session", json.dumps(session), secret=SESSION_SECRET, httponly=True,
                         secure=True, samesite="lax", max_age=SESSION_SECONDS, path="/")
@@ -2054,6 +2063,7 @@ def logout():
     when they do not (or without JavaScript)."""
     response.delete_cookie("aviary_session", path="/", secure=True, samesite="lax")
     response.delete_cookie("aviary_admin", path="/", secure=True, samesite="lax")
+    response.delete_cookie("aviary_seen", path="/", secure=True, samesite="lax")
     response.set_header("Cache-Control", "no-store")
     hosts = []
     try:
@@ -2098,8 +2108,57 @@ def _menu_head(shown, switches):
             f'<div class="act"></div><div class="act"></div><div class="act"></div><div class="act"></div>{sw}</li>')
 
 
+FRONT_PAGE = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Aviary</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico">
+<style>
+ body {{ font: 16px/1.4 system-ui, sans-serif; margin: 0; color: #222; min-height: 100vh;
+        display: flex; align-items: center; justify-content: center;
+        background-color: #fbfbf8;
+        background-image:
+          linear-gradient(rgba(70,130,180,.28) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(70,130,180,.28) 1px, transparent 1px),
+          linear-gradient(rgba(70,130,180,.10) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(70,130,180,.10) 1px, transparent 1px);
+        background-size: 100px 100px, 100px 100px, 20px 20px, 20px 20px; }}
+ main {{ width: min(460px, 92vw); padding: 24px; }}
+ h1 {{ font-size: 56px; margin: 0 0 2px; letter-spacing: -1px; }}
+ .host {{ color: #555; font-weight: 600; font-size: 14px; margin-bottom: 18px; }}
+ pre.fortune {{ margin: 0 0 22px; padding: 10px 14px; background: rgba(255,255,255,.85); border-left: 3px solid #4682b4;
+               font-size: 13px; color: #555; font-style: italic; white-space: pre-wrap; }}
+ a.go {{ display: block; text-align: center; padding: 12px 16px; border-radius: 8px; background: #1a4d8f; color: #fff;
+        text-decoration: none; font-size: 17px; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.15); }}
+ a.go:hover {{ background: #163f75; }}
+ p.small {{ margin: 16px 0 0; font-size: 13px; color: #777; text-align: center; }}
+ p.small a {{ color: #1a4d8f; text-decoration: none; }}
+ p.small a:hover {{ text-decoration: underline; }}
+</style></head><body><main>
+<h1>Aviary</h1>
+<div class="host">{host}</div>
+{fortune}
+<a class="go" href="/login">Sign in</a>
+<p class="small">Certificates here come from our own CA: <a href="/{ca}">{ca}</a></p>
+</main></body></html>
+"""
+
+
+def _front_page():
+    """What someone who is not signed in sees at /: ours, not gitea's login.
+    Nothing about the cluster is on it."""
+    fort = _fortune()
+    response.set_header("Cache-Control", "no-store")
+    return FRONT_PAGE.format(
+        host=html.escape(BASE_DOMAIN or request.get_header("Host", "")),
+        fortune=f'<pre class="fortune">{html.escape(fort)}</pre>' if fort else "",
+        ca=html.escape(CA_FILENAME),
+    )
+
+
 @app.route("/")
 def index():
+    if AUTH_ENABLED and not (_bypass_ok() or _session_user()):
+        return _front_page()
     d = snapshot()
     me = os.environ.get("HOSTNAME", "")
     items, system_items, system_switches = [], [], False

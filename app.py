@@ -1637,8 +1637,8 @@ CHAT_HTML = """
       .catch(function (e) { note('not sent: ' + e.message); })
       .then(tick);
   }
-  // What was typed here before, newest last, for Ctrl+P / Up and Down to walk
-  // through as a shell would (this page's memory only).
+  // What was typed here before, newest last, for Up and Down to walk through
+  // (this page's memory only).
   var past = [], at = 0, draft = '';
   form.onsubmit = function (e) {
     e.preventDefault();
@@ -1659,7 +1659,7 @@ CHAT_HTML = """
   }
   inp.addEventListener('keydown', function (e) {
     var plain = !e.shiftKey && !e.altKey && !e.metaKey;
-    if ((e.key === 'ArrowUp' && plain && !e.ctrlKey) || (e.ctrlKey && plain && (e.key === 'p' || e.key === 'P'))) { e.preventDefault(); recall(-1); }
+    if (e.key === 'ArrowUp' && plain && !e.ctrlKey) { e.preventDefault(); recall(-1); }
     else if (e.key === 'ArrowDown' && plain && !e.ctrlKey) { e.preventDefault(); recall(1); }
   });
 
@@ -2215,10 +2215,9 @@ PAGE = """<!doctype html>
 // response can't let requests pile up. Silent on error so a transient blip just
 // leaves the last-good rows on screen.
 // (Braces are doubled because this page is rendered with str.format().)
-// Ctrl+P is "previous line" to anyone with shell habits, and this page has a
-// command line in it: it does not open the browser's print dialog here. (In
-// the whiteboard's input it recalls what was typed before.) Printing is
-// still in the browser's menu.
+// Ctrl+P does nothing on this page. It is "previous line" to anyone with
+// shell habits, and this page has a command line in it: here it would only
+// throw up the browser's print dialog. Printing is still in the browser's menu.
 document.addEventListener('keydown', function (e) {{
   if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'p' || e.key === 'P')) e.preventDefault();
 }});

@@ -158,10 +158,10 @@ Everyone on the page sees the same lines and the same drawing, live.
 - Lines are limited to 4,000 characters. The room keeps the last 300 lines in
   memory; a restart of the page empties it.
 
-In the input, **Up** or **Ctrl+P** brings back what you typed before (newest
-first) and **Down** goes forward again; this history is kept only while the
-page is open. Ctrl+P does not open the print dialog anywhere on this page;
-printing is still available from the browser's menu.
+In the input, **Up** brings back what you typed before (newest first) and
+**Down** goes forward again; this history is kept only while the page is
+open. **Ctrl+P does nothing** anywhere on this page (it does not open the
+print dialog); printing is still available from the browser's menu.
 
 Commands, typed as a line:
 

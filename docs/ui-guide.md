@@ -435,6 +435,33 @@ Platform services. The rows work like the Apps rows, with these differences:
 
 ---
 
+### 7.1 Locking System
+
+Beside the **SYSTEM** heading an admin sees a **lock** button. Pressing it
+(and confirming) does two things, in this order:
+
+1. **Syncs the admins.** The gates in front of the System apps go by the
+   Gitea team `aviary:admins`; the page sets that team's members to exactly
+   Gitea's active site administrators (accounts with **Is Administrator**
+   ticked). The page does this itself, signed in to Gitea as its admin
+   account. If Gitea reports no administrators at all, nothing is changed.
+2. **Locks.** The heading then reads **locked by <who>, <when>** for
+   everyone, and nothing of System's can be changed from the page by
+   anyone, admins included: no stop, start, restart, scale, image change
+   or exposure switch on a System app, no deleting a node, no changing the
+   API key. The controls are not drawn, and the server refuses them (HTTP
+   423) if asked directly. Links to the System apps still work for admins,
+   and the Apps list is unaffected.
+
+An admin unlocks it with the **unlock** button in the same place (which
+syncs the admins again first). Any admin can, including the one who locked.
+
+The lock is kept in the cluster (`status.lock` of the AviaryConfig), so it
+survives a restart of the page and is the same for everyone;
+`kubectl get aviaryconfig` shows it. Hovering over the locked notice shows
+what the sync did. The lock stops changes made through this page only:
+someone with `kubectl` access to the cluster is not stopped by it.
+
 ## 8. The CLUSTER table
 
 One row per node: **Node**, **Role**, **Ready**, **Kubelet** (version),

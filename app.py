@@ -1057,10 +1057,10 @@ def app_resources(ns):
     """What the requests/limits popup needs for one app, per resource, in
     millicores (cpu) and Mi (memory):
 
-      usage      the app's busiest container right now (the values are per
-                 container, so that is the one a limit has to clear)
-      peak       the most any one of its containers has used: the high-water
-                 mark a limit should clear (never below usage)
+      usage      the app's busiest pod right now (all its containers together),
+                 and usage_by: its workload
+      peak       the most any one of its pods has used over PEAK_WINDOW: the
+                 high-water mark (never below usage), and peak_by: its workload
       top        the scale's maximum: the largest node, since no container can
                  be given more
       floor      the lowest limit that keeps every pod admissible: a container
@@ -1074,18 +1074,19 @@ def app_resources(ns):
     v1 = client.CoreV1Api()
     unit = {"cpu": 1e-3, "memory": 2**20}
     nss = tile_namespaces(ns)
-    usage = {"cpu": 0.0, "memory": 0.0}
+    usage = {"cpu": (0.0, ""), "memory": (0.0, "")}
     try:
         for x in nss:
             for p in client.CustomObjectsApi().list_namespaced_custom_object(
                 "metrics.k8s.io", "v1beta1", x, "pods"
             ).get("items", []):
-                for c in p.get("containers", []):
-                    for res in usage:
-                        usage[res] = max(usage[res], _q(c["usage"][res]))
+                name = (p.get("metadata") or {}).get("name", "")
+                for res in usage:
+                    total = sum(_q(c["usage"][res]) for c in p.get("containers", []))
+                    usage[res] = max(usage[res], (total, name))
     except Exception:
         pass  # metrics-server optional: the fill just stays empty
-    peak = container_peaks(nss, usage)
+    peak = pod_peaks(nss, usage)
     top = {"cpu": 0.0, "memory": 0.0}
     for n in v1.list_node().items:
         for res in top:
@@ -1102,14 +1103,16 @@ def app_resources(ns):
     least = {"cpu": 0.010, "memory": 32 * 2**20}  # smallest sensible suggestion
     out = {"saved": bool(req or lim)}
     for res, key in (("cpu", "cpu"), ("memory", "mem")):
-        r = _q(req[res]) if res in req else max(usage[res] * 1.25, least[res])
+        r = _q(req[res]) if res in req else max(usage[res][0] * 1.25, least[res])
         if res in req and res not in lim:
             l = 0.0   # saved with a request and no limit: no limit
         else:
             l = min(_q(lim[res]) if res in lim else max(2 * r, floor[res]), top[res])
         out[key] = {
-            "usage": usage[res] / unit[res],
-            "peak": peak[res] / unit[res],
+            "usage": usage[res][0] / unit[res],
+            "usage_by": _workload_of(usage[res][1]),
+            "peak": peak[res][0] / unit[res],
+            "peak_by": _workload_of(peak[res][1]),
             "top": top[res] / unit[res],
             "floor": floor[res] / unit[res],
             "request": (min(r, l) if l else min(r, top[res])) / unit[res],
@@ -1283,13 +1286,21 @@ _peak = {"at": 0.0, "cpu": {}, "mem": {}}
 _peaklock = threading.Lock()
 
 
-_cpeaks = {}   # (namespaces...) -> (when asked, {"cpu": cores, "memory": bytes})
+_cpeaks = {}   # (namespaces...) -> (when asked, {"cpu": (cores, pod), "memory": (bytes, pod)})
 
 
-def container_peaks(namespaces, now):
-    """{"cpu": cores, "memory": bytes}: the most any single container in these
-    namespaces has used over PEAK_WINDOW (Prometheus), and never less than
-    `now`, the busiest container at the moment. Asked when a scale popup opens."""
+def _workload_of(pod):
+    """A pod's workload, from its name: a Deployment's pods are
+    <name>-<replicaset hash>-<pod hash>; a StatefulSet's are <name>-<n>."""
+    m = re.fullmatch(r"(.+)-[a-z0-9]{6,10}-[a-z0-9]{5}", pod or "")
+    return m.group(1) if m else (pod or "")
+
+
+def pod_peaks(namespaces, now):
+    """{"cpu": (cores, pod), "memory": (bytes, pod)}: the most any single pod
+    in these namespaces has used (all its containers together) over
+    PEAK_WINDOW, and which pod; never less than `now`, the busiest pod at the
+    moment, in the same form. Asked when a scale popup opens."""
     out = dict(now)
     if PROMETHEUS_URL and namespaces:
         # Two queries over a week of samples are most of what the popup waits
@@ -1297,19 +1308,19 @@ def container_peaks(namespaces, now):
         key = tuple(sorted(namespaces))
         kept = _cpeaks.get(key)
         if kept and time.time() - kept[0] < 300:
-            return {res: max(out[res], kept[1].get(res, 0.0)) for res in out}
+            return {res: max(out[res], kept[1].get(res, (0.0, ""))) for res in out}
         found = {}
         # Namespace names are DNS labels (letters, digits, hyphens): nothing to escape.
         names = [n for n in namespaces if re.fullmatch(r"[a-z0-9-]+", n)]
         sel = 'container!="",container!="POD",namespace=~"%s"' % "|".join(names)
         asked = (
-            ("cpu", f"max(max_over_time((rate(container_cpu_usage_seconds_total{{{sel}}}[5m]))[{PEAK_WINDOW}:5m]))"),
-            ("memory", f"max(max_over_time(container_memory_working_set_bytes{{{sel}}}[{PEAK_WINDOW}]))"),
+            ("cpu", f"topk(1, max_over_time((sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{{{sel}}}[5m])))[{PEAK_WINDOW}:5m]))"),
+            ("memory", f"topk(1, max_over_time((sum by (namespace, pod) (container_memory_working_set_bytes{{{sel}}}))[{PEAK_WINDOW}:5m]))"),
         )
         for res, expr in asked:
-            for v in _prom(expr, by="").values():
-                found[res] = max(found.get(res, 0.0), v)
-                out[res] = max(out[res], v)
+            for pod, v in _prom(expr, by="pod").items():
+                found[res] = max(found.get(res, (0.0, "")), (v, pod))
+                out[res] = max(out[res], (v, pod))
         if found:   # an unanswered query is asked again next time
             _cpeaks[key] = (time.time(), found)
     return out
@@ -1723,6 +1734,11 @@ RL_CSS = """
  #rl .rl-peak { position: absolute; top: 50%; width: 2px; height: 22px; margin: -11px 0 0 -1px; background: #b00020;
    border-radius: 1px; pointer-events: none; z-index: 1; }
  #rl .rl-peak[hidden] { display: none; }
+ /* What the red line is, written on it: "peak 40m · jitsi-jvb". */
+ #rl .rl-peak span { position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); margin-bottom: 1px;
+   font-size: 11px; line-height: 1; white-space: nowrap; color: #b00020; pointer-events: none; }
+ #rl .rl-peak.near-end span { left: auto; right: 0; transform: none; }
+ #rl .rl-peak.near-start span { left: 0; transform: none; }
  #rl .rl-band { position: absolute; top: 9px; height: 16px; border: 2px solid #1a4d8f; border-radius: 8px;
    box-sizing: border-box; pointer-events: none; }
  #rl .rl-slider input[type=range] { position: absolute; left: 0; top: 0; width: 100%; height: 34px; margin: 0;
@@ -2160,19 +2176,20 @@ RL_HTML = """
 <dialog id="rl"><form method="post">
  <h3>Scale: <span id="rl-app"></span></h3>
  <p class="note">Requests and limits are defaults for each container in this app that sets none
- of its own (a namespace LimitRange). They apply to each container, so the bar is filled to the app's
- busiest container and the red line is the most one container has used; the whole app's figures, as on
- its tile, are beside them. Slide a limit all the way down for no limit, a request all the way down
+ of its own (a namespace LimitRange). The bar is filled to the app's busiest pod right now (all its
+ containers together), and the red line is that pod's high-water mark: the most any one pod of the app
+ has used in the past week, with its workload's name on it. The whole app's figures, as on its tile,
+ are beside them. Slide a limit all the way down for no limit, a request all the way down
  for a request of 0. Pods are set per workload; one
  that cannot run more than one pod is greyed out, with the reason.</p>
  <div class="rl-row" data-res="cpu"><div class="rl-head"><b>CPU</b><span class="now"></span></div>
-  <div class="rl-slider"><div class="rl-track"><div class="rl-fill"></div></div><div class="rl-band"></div><div class="rl-peak"></div>
+  <div class="rl-slider"><div class="rl-track"><div class="rl-fill"></div></div><div class="rl-band"></div><div class="rl-peak"><span></span></div>
    <input type="range" class="lo" min="0" max="1000" step="1" aria-label="CPU request">
    <input type="range" class="hi" min="0" max="1000" step="1" aria-label="CPU limit"></div>
   <div class="rl-vals"><span>request <b class="req"></b></span><span>limit <b class="lim"></b></span></div>
   <input type="hidden" name="cpu_request"><input type="hidden" name="cpu_limit"></div>
  <div class="rl-row" data-res="mem"><div class="rl-head"><b>Memory</b><span class="now"></span></div>
-  <div class="rl-slider"><div class="rl-track"><div class="rl-fill"></div></div><div class="rl-band"></div><div class="rl-peak"></div>
+  <div class="rl-slider"><div class="rl-track"><div class="rl-fill"></div></div><div class="rl-band"></div><div class="rl-peak"><span></span></div>
    <input type="range" class="lo" min="0" max="1000" step="1" aria-label="Memory request">
    <input type="range" class="hi" min="0" max="1000" step="1" aria-label="Memory limit"></div>
   <div class="rl-vals"><span>request <b class="req"></b></span><span>limit <b class="lim"></b></span></div>
@@ -2245,12 +2262,18 @@ RL_HTML = """
     var mark = row.querySelector('.rl-peak'), peak = Math.max(d.peak || 0, d.usage || 0);
     mark.hidden = !(peak > 0);
     mark.style.left = pos(peak) / 10 + '%';
-    mark.title = 'high-water mark: the most one container has used, ' + fmt(res, peak);
+    var by = d.peak_by || d.usage_by || '';
+    mark.title = 'high-water mark: the most one pod (all its containers together) has used in the past week, '
+      + fmt(res, peak) + (by ? ', in ' + by : '');
+    var shortBy = by.length > 28 ? by.slice(0, 27) + '\u2026' : by;   // the whole name is in the tooltip
+    mark.querySelector('span').textContent = 'peak ' + fmt(res, peak) + (shortBy ? ' \u00b7 ' + shortBy : '');
+    mark.classList.toggle('near-end', pos(peak) > 750); mark.classList.toggle('near-start', pos(peak) < 120);
     // Both sets of figures: the whole app's (what its tile shows) and the
     // busiest single container's (what a per-container limit has to clear).
     row.querySelector('.now').textContent =
       'app: ' + fmt(res, d.app_usage || 0) + ' now, ' + fmt(res, d.app_peak || 0) + ' high-water' +
-      ' \u00b7 busiest container: ' + fmt(res, d.usage) + ' now' + (peak > 0 ? ', ' + fmt(res, peak) + ' high-water' : '');
+      ' \u00b7 busiest pod: ' + fmt(res, d.usage) + ' now' + (d.usage_by ? ' (' + d.usage_by + ')' : '')
+      + (peak > 0 ? ', ' + fmt(res, peak) + ' high-water' + (d.peak_by && d.peak_by !== d.usage_by ? ' (' + d.peak_by + ')' : '') : '');
     draw();
   }
   document.addEventListener('click', function (e) {
@@ -2565,6 +2588,7 @@ DARK_CSS = """
  html[data-theme=dark] #rl .rl-track { background: #0f2a31; }
  html[data-theme=dark] #rl .rl-band { border-color: #00e5ff; }
  html[data-theme=dark] #rl .rl-peak { background: #ff6b7a; }
+ html[data-theme=dark] #rl .rl-peak span { color: #ff6b7a; }
  html[data-theme=dark] #rl .rl-slider input[type=range]::-webkit-slider-thumb { background: #001318; border-color: #00e5ff; }
  html[data-theme=dark] #rl .rl-slider input[type=range]::-moz-range-thumb { background: #001318; border-color: #00e5ff; }
  html[data-theme=dark] #rl .rl-list label, html[data-theme=dark] #im .im-w, html[data-theme=dark] #md .md-m { background: #07191e; }

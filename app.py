@@ -887,6 +887,29 @@ _tcache = {}
 _rlock = threading.Lock()
 
 
+_own_image = {}
+
+
+def _own_image_html():
+    """" from <image>, <short digest>": the image this pod runs, read once from
+    its own Pod (the tag alone, :latest, does not say which build)."""
+    if "html" not in _own_image:
+        out = ""
+        try:
+            pod = client.CoreV1Api().read_namespaced_pod(os.environ.get("HOSTNAME", ""), self_namespace())
+            c = next(c for c in pod.spec.containers if c.name == "aviary-frontend") if any(
+                c.name == "aviary-frontend" for c in pod.spec.containers) else pod.spec.containers[0]
+            st = next((x for x in pod.status.container_statuses or [] if x.name == c.name), None)
+            digest = (st.image_id or "").rsplit("@", 1)[-1] if st else ""
+            short = digest.split(":", 1)[-1][:12] if digest.startswith("sha256:") else ""
+            out = f" from <code>{html.escape(c.image)}</code>" + (
+                f' <code title="{html.escape(digest)}">{html.escape(short)}</code>' if short else "")
+        except Exception:
+            out = ""   # not in a cluster, or cannot read its pod: just the name
+        _own_image["html"] = out
+    return _own_image["html"]
+
+
 def self_namespace():
     try:
         with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as f:
@@ -2377,6 +2400,7 @@ SPLASH_CSS = """
  #splash .cage path:nth-of-type(5) { animation-delay: .4s; }
  #splash .cage .door path { animation-delay: .45s; }
  #splash .cage .perch { stroke-width: .2px; }
+ #splash .door path { fill: #fbfbf8; }
  #splash .door { transform-origin: 23.33px 22.5px; animation: splash-door .45s cubic-bezier(.5, 0, .3, 1.3) 1.05s forwards; }
  #splash .bird { stroke-width: 3px; fill: #fbfbf8; opacity: 0; animation: splash-in .3s ease-out .6s forwards; }
  #splash .bird path { vector-effect: non-scaling-stroke; }
@@ -2386,8 +2410,6 @@ SPLASH_CSS = """
  #splash .fy { animation: splash-y 1.5s linear 1.5s forwards; }
  #splash .grow { transform: scale(.6); animation: splash-grow 1.5s ease-in 1.5s forwards; }
  #splash .wing { transform-origin: 5.2px 3.9px; animation: splash-flap .16s ease-in-out 1.62s infinite alternate; }
- #splash .feather { stroke-width: 2px; vector-effect: non-scaling-stroke; opacity: 0;
-                    animation: splash-feather 1.3s ease-in-out 1.75s forwards; }
  #splash .name { font-size: clamp(30px, 7vh, 56px); font-weight: bold; letter-spacing: -1px; margin-top: .3em;
                  opacity: 0; animation: splash-name .6s ease-out .5s forwards; }
  @keyframes splash-draw { to { stroke-dashoffset: 0; } }
@@ -2406,12 +2428,6 @@ SPLASH_CSS = """
    30%  { transform: scale(.68) rotate(-6deg); }
    100% { transform: scale(1.7) rotate(16deg); } }
  @keyframes splash-flap { from { transform: rotate(18deg); } to { transform: rotate(-75deg) scaleX(1.1); } }
- @keyframes splash-feather {
-   0%   { opacity: 0; transform: translate(17px, 23px) rotate(-20deg); }
-   15%  { opacity: 1; }
-   40%  { transform: translate(15.4px, 25px) rotate(35deg); }
-   70%  { opacity: 1; transform: translate(16.8px, 27px) rotate(-25deg); }
-   100% { opacity: 0; transform: translate(15.8px, 28.4px) rotate(10deg); } }
  @keyframes splash-name { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
  @keyframes splash-out { to { opacity: 0; visibility: hidden; } }
 """
@@ -2420,14 +2436,13 @@ SPLASH_HTML = """<div id="splash" aria-hidden="true">
 <svg viewBox="4 2 32 29">
  <g class="cage">
   <path pathLength="1" d="M8.4 27.6a11.6 2.3 0 1 0 23.2 0a11.6 2.3 0 1 0-23.2 0M10 27a10 1.4 0 1 0 20 0a10 1.4 0 1 0-20 0"/>
-  <path pathLength="1" d="M10 16.6V27M13.33 16.6V28.04M16.67 16.6V28.32M23.33 16.6V28.32M26.67 16.6V28.04M30 16.6V27M20 16.6V18.5M20 26.5V28.4"/>
+  <path pathLength="1" d="M10 16.6V27M13.33 16.6V28.04M16.67 16.6V28.32M23.33 16.6V28.32M26.67 16.6V28.04M30 16.6V27M20 16.6V18.5M20 26.5V28.4M10 18.5H30M16.67 26.5H23.33"/>
   <path pathLength="1" d="M10.3 15.4H29.7a.6 .6 0 0 1 0 1.2H10.3a.6 .6 0 0 1 0-1.2z"/>
   <path pathLength="1" d="M20 6V15.4M20 6A10 10 0 0 0 10 15.4M20 6A6.67 10 0 0 0 13.33 15.4M20 6A3.33 10 0 0 0 16.67 15.4M20 6A3.33 10 0 0 1 23.33 15.4M20 6A6.67 10 0 0 1 26.67 15.4M20 6A10 10 0 0 1 30 15.4"/>
   <path pathLength="1" d="M20 6a1.25 1.25 0 1 1 .01 0"/>
   <path pathLength="1" class="perch" d="M10 24.9H30"/>
-  <g class="door"><path pathLength="1" d="M23.33 18.5H17.4a.7 .7 0 0 0-.7 .7V25.8a.7 .7 0 0 0 .7 .7H23.33M20 18.5V26.5"/></g>
+  <g class="door"><path pathLength="1" d="M16.67 18.5H23.33V26.5H16.67ZM20 18.5V26.5"/></g>
  </g>
- <path class="feather" d="M-.8 .3Q0 -.5 .8 -.3"/>
  <g class="fx"><g class="fy"><g transform="translate(20 22.2)"><g class="grow"><g class="bird" transform="translate(-6 -4.5)">
   <path class="legs" d="M5.2 7.2V8.8M4.5 8.8H5.9M6.8 7.1V8.8M6.1 8.8H7.5"/>
   <path d="M1.6 3.4L.3 2.9L1.5 2.1C1.8 .6 4.2 .1 5.2 1.5C5.8 2.4 6.6 3 8 3.4L12 3.6L9.6 5.2C8.6 7.2 5.4 8 3.6 6.8C2.2 5.9 1.6 4.6 1.6 3.4z"/>
@@ -2575,7 +2590,7 @@ DARK_CSS = """
  /* the splash */
  html[data-theme=dark] #splash { background-color: #000; }
  html[data-theme=dark] #splash svg { stroke: #00e5ff; }
- html[data-theme=dark] #splash .bird { fill: #000; }
+ html[data-theme=dark] #splash .bird, html[data-theme=dark] #splash .door path { fill: #000; }
  html[data-theme=dark] #splash .bird .eye { fill: #00e5ff; }
  /* the corner's light/dark switch (both themes) */
  .corner .theme { margin-top: 3px; }
@@ -2677,6 +2692,7 @@ PAGE = """<!doctype html>
    border: 1px solid #b00020; background: #fff; color: #b00020; }}
  form.nodedel button:hover {{ background: #b00020; color: #fff; }}
  footer {{ margin-top: 48px; color: #888; font-size: 13px; }}
+ footer code {{ font-size: 12px; }}
 {rl_css}{splash_css}{dark_css}</style></head><body>{splash_html}<main>
 <div class="hdr">
 <nav><a href="/{ca_name}" download="{ca_name}" title="Cluster CA: trust this to stop the browser warnings">{ca_name}</a></nav>
@@ -2692,7 +2708,7 @@ PAGE = """<!doctype html>
 <h2>/etc/hosts</h2>
 <p>If your resolver does not know these names:</p>
 <pre>{hosts}</pre>
-<footer>Served by {me}</footer>
+<footer>Served by {me}{image}</footer>
 </main>
 {rl_html}
 <script>
@@ -3311,6 +3327,7 @@ def index():
         nodes=nodes_html,
         hosts=html.escape(hosts),
         me=html.escape(me),
+        image=_own_image_html(),
         rl_css=RL_CSS + IMG_CSS + SW_CSS + (CHAT_CSS if ROOM_ENABLED else ""),
         rl_html=RL_HTML + IMG_HTML,
         chat=_chat_html(d.get("gpus", 0)) if ROOM_ENABLED else "",

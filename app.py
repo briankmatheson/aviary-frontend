@@ -1702,6 +1702,11 @@ PAGE = """<!doctype html>
  ul.menu li.off {{ opacity: .55; filter: grayscale(1); }}
  ul.menu li .app {{ flex: 1 1 auto; min-width: 0; }}
  ul.menu li .app a {{ text-decoration: none; color: #1a4d8f; font-size: 20px; }}
+ /* The whole row is the link: the app's name stretches over its box, and the
+    row's own controls (buttons, switches) sit above that. */
+ ul.menu li {{ position: relative; }}
+ ul.menu li .app a::after {{ content: ""; position: absolute; inset: 0; border-radius: 8px; }}
+ ul.menu li .act, ul.menu li .sw {{ position: relative; z-index: 1; }}
  ul.menu li.off .app a {{ color: #888; }}
  ul.menu li .app .noweb {{ color: #1a4d8f; font-size: 20px; cursor: default; }}
  ul.menu li .app small {{ display: block; font-size: 13px; color: #666; }}

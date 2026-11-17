@@ -201,8 +201,8 @@ CHAT_ROOM_KEEP = 300       # lines the room remembers (in memory: a restart empt
 # What the model may do for itself, as tools it can call mid-reply:
 #
 #   kubernetes_get  read the cluster through the Kubernetes API. Read-only is
-#                   not left to the model's good behaviour: this app is
-#                   cluster-admin (it runs helm), so the lookups are made with a
+#                   not left to the model's good behaviour: this app can
+#                   change workloads in the apps' namespaces, so the lookups are made with a
 #                   token for a *different* ServiceAccount, CHAT_SERVICE_ACCOUNT,
 #                   which aviary-deploy binds to read-only roles that leave
 #                   Secrets out. No such account, no cluster lookups.
@@ -1402,120 +1402,97 @@ def node_disk_peak(io):
 
 
 # ---------------------------------------------------------------------------
-# Helm: the Apps list can stop (helm uninstall) and start (reinstall) a release.
-# Uninstall keeps the release history (--keep-history) and pins the app's PVCs
-# with helm.sh/resource-policy=keep, so the data volumes survive; reinstall
-# rebuilds the chart straight out of the kept release secret and re-adopts those
-# volumes. The pod's ServiceAccount needs cluster-wide rights for this (see
-# aviary-deploy/apps/aviary-frontend.tf).
+# Stop and start. Stopping an app sets every one of its workloads to no pods
+# and remembers what each had; starting puts that back. Nothing is deleted:
+# volumes, Services, routes and configuration stay as they are. (This used to
+# be helm uninstall / reinstall, which needed this page to be cluster-admin.)
+#
+#   Deployment, StatefulSet   scaled to 0; the number it had is kept in the
+#                             STOPPED annotation
+#   DaemonSet                 has no number to set: it is given a node
+#                             selector no node matches, so its pods go
+#
+# A workload something else owns (an operator's) is left alone: its owner
+# would only put it back.
 # ---------------------------------------------------------------------------
-
-# Helm runs as the pod's ServiceAccount (in-cluster); caches go under /tmp,
-# which is writable for the 'nobody' user the image runs as.
-_HELM_ENV = {
-    **os.environ,
-    "HELM_CACHE_HOME": "/tmp/helm/cache",
-    "HELM_CONFIG_HOME": "/tmp/helm/config",
-    "HELM_DATA_HOME": "/tmp/helm/data",
-}
+STOPPED = "aviary.xdebbie.org/stopped"   # annotation on a stopped workload; also the DaemonSet selector's key
 
 
-def _helm(*args, timeout=300):
-    return subprocess.run(
-        ["helm", *args], capture_output=True, text=True, env=_HELM_ENV, timeout=timeout
-    )
-
-
-def releases():
-    """{(namespace, name): status} for every Helm release, uninstalled ones
-    (kept history) included, so the menu can tell stopped apps from running."""
-    out = {}
-    try:
-        r = _helm("list", "-A", "-a", "-o", "json", timeout=30)
-        if r.returncode == 0:
-            for rel in json.loads(r.stdout or "[]"):
-                out[(rel["namespace"], rel["name"])] = rel["status"]
-    except Exception:
-        pass  # no helm, or not allowed: just no buttons
+def _stoppable(ns):
+    """[(kind, object)] for the workloads of ns that stop/start acts on."""
+    apps, out = client.AppsV1Api(), []
+    for kind, lister in (("deployment", apps.list_namespaced_deployment),
+                         ("statefulset", apps.list_namespaced_stateful_set),
+                         ("daemonset", apps.list_namespaced_daemon_set)):
+        for w in lister(ns).items:
+            if w.metadata.owner_references:
+                continue
+            if ns == self_namespace() and w.metadata.name == "aviary-frontend":
+                continue   # this page could not start itself again
+            out.append((kind, w))
     return out
 
 
-def _release_for(ns, label, rels):
-    """The release backing an app in ns: its label if that is a release, else
-    the sole release in the namespace, else None (ambiguous -> no button)."""
-    if (ns, label) in rels:
-        return label
-    here = [name for (n, name) in rels if n == ns]
-    if label in here:
-        return label
-    return here[0] if len(here) == 1 else None
+def stop_workloads(ns):
+    """Stop every workload in ns. Returns how many were stopped."""
+    apps, n = client.AppsV1Api(), 0
+    for kind, w in _stoppable(ns):
+        name = w.metadata.name
+        if (w.metadata.annotations or {}).get(STOPPED) is not None:
+            continue   # already stopped: keep the number remembered then
+        if kind == "daemonset":
+            apps.patch_namespaced_daemon_set(name, ns, {
+                "metadata": {"annotations": {STOPPED: "daemonset"}},
+                "spec": {"template": {"spec": {"nodeSelector": {STOPPED: "true"}}}}})
+        else:
+            patch = apps.patch_namespaced_deployment if kind == "deployment" else apps.patch_namespaced_stateful_set
+            patch(name, ns, {"metadata": {"annotations": {STOPPED: str(w.spec.replicas or 0)}},
+                             "spec": {"replicas": 0}})
+        n += 1
+    return n
 
 
-def _release_obj(ns, rel):
-    """The decoded latest Helm release object (embeds the chart + user values).
-
-    A Helm 3 release secret stores base64(gzip(json)); Kubernetes returns that
-    base64-encoded again, so .data['release'] is doubly base64-ed."""
-    v1 = client.CoreV1Api()
-    secs = v1.list_namespaced_secret(ns, label_selector=f"owner=helm,name={rel}").items
-    if not secs:
-        return None
-    s = max(secs, key=lambda x: int(x.metadata.labels.get("version", "0")))
-    blob = gzip.decompress(base64.b64decode(base64.b64decode(s.data["release"])))
-    return json.loads(blob)
-
-
-def _write_chart(chart, parent):
-    """Reconstruct a chart directory (recursively, with subcharts) from the
-    'chart' of a decoded release, and return its path."""
-    meta = chart["metadata"]
-    cdir = os.path.join(parent, meta["name"])
-    os.makedirs(cdir, exist_ok=True)
-    with open(os.path.join(cdir, "Chart.yaml"), "w") as f:
-        yaml.safe_dump(meta, f)
-    if chart.get("values") is not None:
-        with open(os.path.join(cdir, "values.yaml"), "w") as f:
-            yaml.safe_dump(chart["values"], f)
-    if chart.get("schema"):
-        with open(os.path.join(cdir, "values.schema.json"), "wb") as f:
-            f.write(base64.b64decode(chart["schema"]))
-    for group in ("templates", "files"):
-        for t in chart.get(group) or []:
-            p = os.path.join(cdir, t["name"])
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            with open(p, "wb") as f:
-                f.write(base64.b64decode(t["data"]))
-    for dep in chart.get("dependencies") or []:
-        _write_chart(dep, os.path.join(cdir, "charts"))
-    return cdir
+def start_workloads(ns):
+    """Start what stop_workloads stopped in ns, as it was. Returns how many."""
+    apps, n = client.AppsV1Api(), 0
+    for kind, w in _stoppable(ns):
+        was = (w.metadata.annotations or {}).get(STOPPED)
+        if was is None:
+            continue
+        name = w.metadata.name
+        if kind == "daemonset":
+            apps.patch_namespaced_daemon_set(name, ns, {
+                "metadata": {"annotations": {STOPPED: None}},
+                "spec": {"template": {"spec": {"nodeSelector": {STOPPED: None}}}}})
+        else:
+            patch = apps.patch_namespaced_deployment if kind == "deployment" else apps.patch_namespaced_stateful_set
+            try:
+                replicas = max(1, int(was))
+            except ValueError:
+                replicas = 1
+            patch(name, ns, {"metadata": {"annotations": {STOPPED: None}}, "spec": {"replicas": replicas}})
+        n += 1
+    return n
 
 
-def _keep_pvcs(ns, rel):
-    """Pin an app's PVCs so helm uninstall leaves the data behind. Prefer the
-    release's own PVCs; fall back to every PVC in the namespace (apps here run
-    one per namespace)."""
-    v1 = client.CoreV1Api()
-    pvcs = v1.list_namespaced_persistent_volume_claim(
-        ns, label_selector=f"app.kubernetes.io/instance={rel}"
-    ).items
-    if not pvcs:
-        pvcs = v1.list_namespaced_persistent_volume_claim(ns).items
-    body = {"metadata": {"annotations": {"helm.sh/resource-policy": "keep"}}}
-    for p in pvcs:
-        try:
-            v1.patch_namespaced_persistent_volume_claim(p.metadata.name, ns, body)
-        except Exception:
-            pass
-
-
-def _purge_history(ns, rel):
-    """Drop the kept release secrets so a fresh install can reuse the name."""
-    v1 = client.CoreV1Api()
-    for s in v1.list_namespaced_secret(ns, label_selector=f"owner=helm,name={rel}").items:
-        try:
-            v1.delete_namespaced_secret(s.metadata.name, ns)
-        except Exception:
-            pass
+def stop_states():
+    """{namespace: "stopped" | "running"} for every namespace with a workload
+    stop/start acts on: stopped when any of them carries the STOPPED mark."""
+    apps, out = client.AppsV1Api(), {}
+    try:
+        for lister in (apps.list_deployment_for_all_namespaces, apps.list_stateful_set_for_all_namespaces,
+                       apps.list_daemon_set_for_all_namespaces):
+            for w in lister().items:
+                if w.metadata.owner_references:
+                    continue
+                ns = w.metadata.namespace
+                if (w.metadata.annotations or {}).get(STOPPED) is not None:
+                    out[ns] = "stopped"
+                else:
+                    out.setdefault(ns, "running")
+    except Exception:
+        pass  # cannot list: no stop/start buttons
+    return out
 
 
 def _bump():
@@ -1602,14 +1579,14 @@ def _snapshot_build():
         "l4": l4_routes(gws),
         "nodes": nodes(),
         "metrics": metrics(),
-        "releases": releases(),
+        "stops": stop_states(),
         "gpus": gpu_count() if CHAT_ENABLED else 0,
     }
 
 
 def _snapshot_refresh():
     """Fetch a new snapshot unless someone just did. It takes seconds (the
-    cluster's API, Prometheus, helm), so it runs with no lock on the cache:
+    cluster's API, Prometheus), so it runs with no lock on the cache:
     pages keep being served from the one in hand meanwhile."""
     with _building:
         with _lock:
@@ -3153,7 +3130,7 @@ def index():
     me = os.environ.get("HOSTNAME", "")
     items, system_items, system_switches = [], [], False
     m = d["metrics"]
-    rels = d["releases"]
+    stops = d.get("stops") or {}
     gws = d["gateways"]
     shown = [(k, gw) for k, gw in EXPOSURES if (GATEWAY_NAMESPACE, gw) in gws]
     rows = [(r, False) for r in d["routes"]] + [(r, True) for r in d.get("l4", [])]
@@ -3200,23 +3177,19 @@ def index():
                 f'<button type="button" class="warn set" data-ns="{html.escape(ns)}" '
                 f'data-app="{html.escape(label)}" title="scale: requests, limits and number of pods">&#8660;</button>'
             )
-        rel = _release_for(ns, label, rels)
-        off = bool(rel) and rels.get((ns, rel)) == "uninstalled"
-        if not rel or me_too:
-            # Not a helm release: no button. Nor for this page, which could not
-            # be started again from a page that is no longer there.
+        states = {stops[x] for x in nss if x in stops}
+        off = "stopped" in states
+        if not states or me_too:
+            # Nothing here to stop. Nor this page, which could not be started
+            # again from a page that is no longer there.
             act = '<div class="act"></div>'
+        elif off:
+            act = (f'<form class="act start" method="post" action="/app/{html.escape(ns)}/start">'
+                   f'<button title="start: run its workloads again, as they were">&#9654;</button></form>')
         else:
-            verb, cls, icon, tip = (
-                ("install", "start", "&#9654;", "reinstall (re-attaches the same volumes)")
-                if off
-                else ("uninstall", "stop", "&#9632;", "helm uninstall (keeps volumes)")
-            )
-            act = (
-                f'<form class="act {cls}" method="post" '
-                f'action="/app/{html.escape(ns)}/{html.escape(rel)}/{verb}">'
-                f'<button title="{tip}">{icon}</button></form>'
-            )
+            act = (f'<form class="act stop" method="post" action="/app/{html.escape(ns)}/stop" '
+                   f'onsubmit="return confirm(\'Stop {html.escape(label)}? Its pods go; its volumes and settings stay.\')">'
+                   f'<button title="stop: no pods (volumes, routes and settings stay)">&#9632;</button></form>')
         # Restart sits to the right of stop; a stopped app has nothing to roll.
         restart = '<div class="act"></div>' if off else (
             f'<form class="act restart" method="post" action="/app/{html.escape(ns)}/restart">'
@@ -5006,41 +4979,20 @@ def app_expose(rns, rname):
     redirect("/")
 
 
-@app.route("/app/<ns>/<rel>/uninstall", method="POST")
-def app_stop(ns, rel):
-    """Stop an app: pin its PVCs so the data survives, then helm uninstall
-    keeping the release history (the chart to reinstall from lives in it)."""
-    _keep_pvcs(ns, rel)
-    r = _helm("uninstall", rel, "-n", ns, "--keep-history", timeout=300)
-    _bump()
-    if r.returncode != 0:
-        response.status = 500
-        return f"helm uninstall {rel} failed:\n{r.stderr}"
-    redirect("/")
-
-
-@app.route("/app/<ns>/<rel>/install", method="POST")
-def app_start(ns, rel):
-    """Start a stopped app: rebuild the chart from the kept release secret and
-    install it again, re-adopting the volumes left behind."""
-    obj = _release_obj(ns, rel)
-    if not obj:
-        response.status = 404
-        return f"no saved release for {rel} in {ns}\n"
-    work = tempfile.mkdtemp(prefix="chart-", dir="/tmp")
+@app.route("/app/<ns>/<what:re:stop|start>", method="POST")
+def app_stop_start(ns, what):
+    """Stop an app (no pods; everything else stays) or start it as it was,
+    across the tile's namespaces."""
+    if ns not in app_namespaces() or ns == self_namespace():
+        raise HTTPError(404, "no such app\n")
+    act = stop_workloads if what == "stop" else start_workloads
     try:
-        cdir = _write_chart(obj["chart"], work)
-        vals = os.path.join(work, "values.yaml")
-        with open(vals, "w") as f:
-            yaml.safe_dump(obj.get("config") or {}, f)
-        _purge_history(ns, rel)
-        r = _helm("install", rel, cdir, "-n", ns, "-f", vals, "--wait=false", timeout=600)
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
+        for x in tile_namespaces(ns):
+            act(x)
+    except client.exceptions.ApiException as e:
+        _bump()
+        raise HTTPError(502, f"could not {what} {ns}: {e.reason}\n")
     _bump()
-    if r.returncode != 0:
-        response.status = 500
-        return f"helm install {rel} failed:\n{r.stderr}"
     redirect("/")
 
 

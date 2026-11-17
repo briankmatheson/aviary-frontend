@@ -108,6 +108,8 @@ BLURBS = {
     "mattermost": "Team chat",
     "bash": "In-cluster shell",
     "velero": "Backup and restore",
+    "cloudbeaver": "Database client (CloudBeaver)",
+    "kubeshark": "Live traffic between pods (Kubeshark)",
     "jupyterhub": "Interactive notebooks",
     "mlflow": "Machine learning lifecycle",
     "qdrant": "Vector database",
@@ -120,7 +122,7 @@ BLURBS = {
 # aviary/group label ("apps" or "system") on each HTTPRoute; this list is only
 # the fallback for a route without one. Keyed like BLURBS; unlisted means app.
 GROUP_LABEL = "aviary/group"
-SYSTEM = {"grafana", "headlamp", "velero", "postgres-ui", "minio"}
+SYSTEM = {"grafana", "headlamp", "velero", "kubeshark", "postgres-ui", "minio"}
 # Routed over HTTP but with no page to look at (velero's route reaches only its
 # metrics port): listed like a service that is not a web page, name and no link.
 NOWEB = {"velero"}

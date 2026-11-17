@@ -268,7 +268,7 @@ Then the controls, left to right. Hover over any of them for a description.
 | Control | Looks like | What it does |
 |---|---|---|
 | Scale | A red circle with **!** (some containers have no requests or limits set), or a grey circle with a double arrow | Opens the **Scale** dialog (section 6.1) |
-| Stop / start | A square (stop) or a triangle (start) | Stop uninstalls the app but keeps its data volumes; the row greys out. Start reinstalls it and re-attaches the same volumes. Only shown for apps installed as a Helm release. |
+| Stop / start | A square (stop) or a triangle (start) | Stop asks first, then sets every workload of the app to no pods; nothing is deleted, so its volumes, routes and settings stay, and the row greys out. Start runs the workloads again with the number of pods each had. A workload an operator manages (a database cluster, say) is left running. This page has no stop button for itself. |
 | Restart | A circular arrow | Restarts every workload of the app (a rolling restart). |
 | Images | Three horizontal lines | Opens the **Images** dialog (section 6.2) |
 | **PRIVATE** switch | Blue when on | Whether the app is reachable on the private gateway (the `aviary.mesh.bmath.nyc` names). Turning it off makes the app unreachable from the mesh. |

@@ -1493,6 +1493,9 @@ CHAT_CSS = """
  #chat form button.pen { flex: 0 0 auto; margin-left: 10px; padding: 0 2px; border: 0; background: none; cursor: pointer;
    font: inherit; color: #999; }
  #chat form button.pen { transition: transform .12s ease; transform-origin: 50% 60%; }
+ #chat form button.rub { flex: 0 0 auto; margin-left: 8px; padding: 0 2px; border: 0; background: none; cursor: pointer;
+   font: inherit; color: #999; transition: transform .12s ease; transform-origin: 50% 60%; }
+ #chat form button.rub:hover, #chat form button.rub:focus-visible { color: #b00020; transform: scale(2.2); }
  #chat form button.pen:hover, #chat.drawing form button.pen { color: #1a4d8f; }
  /* The marker is small until the pointer is on it (or it is in hand). */
  #chat form button.pen:hover, #chat form button.pen:focus-visible { transform: scale(2.2); }
@@ -1545,7 +1548,7 @@ CHAT_HTML = """
 <section id="chat" class="__CLASS__" aria-label="Whiteboard" data-hint="__HINT__" data-nick="__RAWNICK__" data-me="__ME__">
  <div class="board"><canvas aria-hidden="true"></canvas><div class="chat-log" aria-live="polite"></div></div>
  <hr>
- <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off" maxlength="4000"><button type="button" class="pen" title="the marker: draw on the whiteboard (click again to put it down; /erase wipes the drawing)" aria-pressed="false">&#9998;</button><button type="button" class="model" title="choose or install a model">__NICK__ &#9662;</button></form>
+ <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off" maxlength="4000"><button type="button" class="pen" title="the marker: draw on the whiteboard (click again to put it down; /erase wipes the drawing)" aria-pressed="false">&#9998;</button><button type="button" class="rub" title="the eraser: wipe the drawing for everyone (the lines stay; /clear empties the whole board)" aria-label="Wipe the drawing">&#9003;</button><button type="button" class="model" title="choose or install a model">__NICK__ &#9662;</button></form>
 </section>
 <dialog id="md">
  <h3>Model</h3>
@@ -1634,13 +1637,39 @@ CHAT_HTML = """
       .catch(function (e) { note('not sent: ' + e.message); })
       .then(tick);
   }
+  // What was typed here before, newest last, for Up and Down to walk through
+  // (this page's memory only).
+  var past = [], at = 0, draft = '';
   form.onsubmit = function (e) {
     e.preventDefault();
     var text = inp.value.trim();
     if (!text || inp.disabled) return;
     inp.value = '';
+    if (past[past.length - 1] !== text) past.push(text);
+    if (past.length > 100) past.shift();
+    at = past.length; draft = '';
     say(text);
   };
+  function recall(step) {
+    if (!past.length) return;
+    if (at === past.length) draft = inp.value;
+    at = Math.max(0, Math.min(past.length, at + step));
+    inp.value = at === past.length ? draft : past[at];
+    inp.setSelectionRange(inp.value.length, inp.value.length);
+  }
+  inp.addEventListener('keydown', function (e) {
+    var plain = !e.shiftKey && !e.altKey && !e.metaKey;
+    if (e.ctrlKey && plain && (e.key === 'l' || e.key === 'L')) {
+      // Ctrl+L, as in a terminal: clear the lines from this view. Only this
+      // view -- the room keeps them (a reload brings them back), the drawing
+      // stays, and nobody else's board changes. Lines said from now on show.
+      e.preventDefault();
+      rows = {}; log.textContent = '';
+      return;
+    }
+    if (e.key === 'ArrowUp' && plain && !e.ctrlKey) { e.preventDefault(); recall(-1); }
+    else if (e.key === 'ArrowDown' && plain && !e.ctrlKey) { e.preventDefault(); recall(1); }
+  });
 
   // Drawing. Strokes are lists of points in thousandths of the canvas, so they
   // land in the same place whatever size each person's board is. The pen
@@ -1692,6 +1721,12 @@ CHAT_HTML = """
       .then(function (r) { if (!r.ok) return r.text().then(function (t) { note(t.trim() || ('HTTP ' + r.status)); }); })
       .catch(function () {}).then(tick);
   }
+  // The eraser wipes the drawing for everybody (as /erase does), after asking:
+  // it is other people's drawing too.
+  form.querySelector('button.rub').onclick = function () {
+    if (!strokes.length) { note('nothing is drawn'); return; }
+    if (confirm('Wipe the drawing for everyone? The lines stay.')) say('/erase');
+  };
   cv.addEventListener('pointerup', lift);
   cv.addEventListener('pointercancel', lift);
   if (window.ResizeObserver) new ResizeObserver(fit).observe(board);
@@ -2188,6 +2223,12 @@ PAGE = """<!doctype html>
 // response can't let requests pile up. Silent on error so a transient blip just
 // leaves the last-good rows on screen.
 // (Braces are doubled because this page is rendered with str.format().)
+// Ctrl+P does nothing on this page. It is "previous line" to anyone with
+// shell habits, and this page has a command line in it: here it would only
+// throw up the browser's print dialog. Printing is still in the browser's menu.
+document.addEventListener('keydown', function (e) {{
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'p' || e.key === 'P')) e.preventDefault();
+}});
 // Menu tiles can be dragged into another order, within their own list. The
 // order is this person's own and is saved as soon as a tile is dropped.
 (function () {{

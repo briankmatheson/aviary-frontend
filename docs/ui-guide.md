@@ -158,6 +158,13 @@ Everyone on the page sees the same lines and the same drawing, live.
 - Lines are limited to 4,000 characters. The room keeps the last 300 lines in
   memory; a restart of the page empties it.
 
+In the input, **Up** brings back what you typed before (newest first) and
+**Down** goes forward again; this history is kept only while the page is
+open. **Ctrl+L**, with the cursor in the input, clears the lines from your own view
+as it would a terminal: the room keeps them (a reload brings them back),
+the drawing stays, and nobody else's board changes. **Ctrl+P does nothing** anywhere on this page (it does not open the
+print dialog); printing is still available from the browser's menu.
+
 Commands, typed as a line:
 
 | Command | Effect |
@@ -183,7 +190,10 @@ When a GPU returns the room says `* <name> is back`.
 - Press and drag on the board to draw. Each person's strokes have their own
   colour. A stroke is shared with everyone when you release the button.
 - Click the marker again to put it down, so that clicks go to the text again.
-- `/erase` wipes the drawing for everybody.
+- The **eraser** (the button beside the marker) wipes the drawing for
+  everybody, after asking **Wipe the drawing for everyone? The lines stay.**
+  Typing `/erase` does the same without asking. Neither removes the lines;
+  `/clear` empties the whole board.
 - The model does not see the drawing, only the text.
 
 ### 5.4 The model menu

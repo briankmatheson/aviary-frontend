@@ -1634,13 +1634,31 @@ CHAT_HTML = """
       .catch(function (e) { note('not sent: ' + e.message); })
       .then(tick);
   }
+  // What was typed here before, newest last, for Ctrl+P / Up and Down to walk
+  // through as a shell would (this page's memory only).
+  var past = [], at = 0, draft = '';
   form.onsubmit = function (e) {
     e.preventDefault();
     var text = inp.value.trim();
     if (!text || inp.disabled) return;
     inp.value = '';
+    if (past[past.length - 1] !== text) past.push(text);
+    if (past.length > 100) past.shift();
+    at = past.length; draft = '';
     say(text);
   };
+  function recall(step) {
+    if (!past.length) return;
+    if (at === past.length) draft = inp.value;
+    at = Math.max(0, Math.min(past.length, at + step));
+    inp.value = at === past.length ? draft : past[at];
+    inp.setSelectionRange(inp.value.length, inp.value.length);
+  }
+  inp.addEventListener('keydown', function (e) {
+    var plain = !e.shiftKey && !e.altKey && !e.metaKey;
+    if ((e.key === 'ArrowUp' && plain && !e.ctrlKey) || (e.ctrlKey && plain && (e.key === 'p' || e.key === 'P'))) { e.preventDefault(); recall(-1); }
+    else if (e.key === 'ArrowDown' && plain && !e.ctrlKey) { e.preventDefault(); recall(1); }
+  });
 
   // Drawing. Strokes are lists of points in thousandths of the canvas, so they
   // land in the same place whatever size each person's board is. The pen
@@ -2188,6 +2206,13 @@ PAGE = """<!doctype html>
 // response can't let requests pile up. Silent on error so a transient blip just
 // leaves the last-good rows on screen.
 // (Braces are doubled because this page is rendered with str.format().)
+// Ctrl+P is "previous line" to anyone with shell habits, and this page has a
+// command line in it: it does not open the browser's print dialog here. (In
+// the whiteboard's input it recalls what was typed before.) Printing is
+// still in the browser's menu.
+document.addEventListener('keydown', function (e) {{
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'p' || e.key === 'P')) e.preventDefault();
+}});
 // Menu tiles can be dragged into another order, within their own list. The
 // order is this person's own and is saved as soon as a tile is dropped.
 (function () {{

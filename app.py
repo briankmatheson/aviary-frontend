@@ -121,6 +121,9 @@ BLURBS = {
 # the fallback for a route without one. Keyed like BLURBS; unlisted means app.
 GROUP_LABEL = "aviary/group"
 SYSTEM = {"grafana", "headlamp", "velero", "postgres-ui", "minio"}
+# Routed over HTTP but with no page to look at (velero's route reaches only its
+# metrics port): listed like a service that is not a web page, name and no link.
+NOWEB = {"velero"}
 
 # Exposure switches: each app (not the system entries) gets one switch per
 # Gateway. The private Gateway is the internal one, the public one is the
@@ -1974,7 +1977,7 @@ def index():
         row = (
             f'<li class="{"off" if off else ""}"><div class="app">'
             + (f'<span class="noweb" title="not a web page: {html.escape(svc)} port {port}">{html.escape(label)}</span>'
-               if l4 else f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>') +
+               if l4 or label in NOWEB else f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>') +
             f"<small>{html.escape(blurb)}</small></div>"
             f'<div class="stats">'
             f'<div class="stat"><b{cpu_heat}>{cpu}</b></div>'

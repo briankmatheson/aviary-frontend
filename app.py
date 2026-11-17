@@ -1681,7 +1681,7 @@ CHAT_HTML = """
   function ink(st) {
     var p = st.pts, w = cv.width, h = cv.height;
     if (!p || p.length < 2) return;
-    ctx.strokeStyle = 'hsl(' + hue(st.nick || '') + ', 65%, 42%)';
+    ctx.strokeStyle = 'hsl(' + hue(st.nick || '') + (document.documentElement.dataset.theme === 'dark' ? ', 85%, 66%)' : ', 65%, 42%)');
     ctx.lineWidth = Math.max(1.5, w / 400); ctx.lineCap = ctx.lineJoin = 'round';
     ctx.beginPath(); ctx.moveTo(p[0][0] * w / 1000, p[0][1] * h / 1000);
     for (var i = 1; i < p.length; i++) ctx.lineTo(p[i][0] * w / 1000, p[i][1] * h / 1000);
@@ -1731,6 +1731,7 @@ CHAT_HTML = """
   cv.addEventListener('pointerup', lift);
   cv.addEventListener('pointercancel', lift);
   if (window.ResizeObserver) new ResizeObserver(fit).observe(board);
+  document.addEventListener('aviary-theme', fit);
   fit();
   inp.onkeydown = function (e) { if (e.key === 'Escape' && busy) say('/stop'); };
   document.addEventListener('visibilitychange', function () { if (!document.hidden) tick(); });
@@ -2122,9 +2123,144 @@ SPLASH_HTML = """<div id="splash" aria-hidden="true">
 </script>
 """
 
+# Dark mode: black and cyan. The page follows the system's light/dark setting
+# until someone picks one with the switch in the corner, which is then
+# remembered in that browser. THEME_JS runs in <head>, before anything is
+# painted, and sets data-theme on <html>; DARK_CSS restates every colour under
+# html[data-theme=dark], after the light rules it overrides.
+THEME_JS = """<script>
+(function () {
+  var t = null;
+  try { t = localStorage.getItem('aviary-theme'); } catch (e) {}
+  if (t !== 'dark' && t !== 'light')
+    t = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  document.documentElement.dataset.theme = t;
+  window.aviaryTheme = function (to) {
+    to = to || (document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+    document.documentElement.dataset.theme = to;
+    try { localStorage.setItem('aviary-theme', to); } catch (e) {}
+    document.dispatchEvent(new Event('aviary-theme'));
+    return to;
+  };
+})();
+</script>"""
+
+DARK_CSS = """
+ html[data-theme=dark] { color-scheme: dark; }
+ html[data-theme=dark] body { color: #d6f6fb; background-color: #000;
+   background-image:
+     linear-gradient(rgba(0,229,255,.20) 1px, transparent 1px),
+     linear-gradient(90deg, rgba(0,229,255,.20) 1px, transparent 1px),
+     linear-gradient(rgba(0,229,255,.07) 1px, transparent 1px),
+     linear-gradient(90deg, rgba(0,229,255,.07) 1px, transparent 1px); }
+ html[data-theme=dark] a { color: #5eeaff; }
+ html[data-theme=dark] nav a { color: #5eeaff; background: #04141a; border-color: #17505c; }
+ html[data-theme=dark] nav a:hover { background: #0a2a33; }
+ html[data-theme=dark] .corner .host { color: #9fd3dc; }
+ html[data-theme=dark] .corner .acct .who { color: #6f9aa1; }
+ html[data-theme=dark] .corner .acct a, html[data-theme=dark] .corner .theme a { color: #5eeaff; }
+ html[data-theme=dark] h1 { color: #e9fdff; }
+ html[data-theme=dark] h1 small, html[data-theme=dark] h2 { color: #4fd6e8; }
+ html[data-theme=dark] ul.menu li { background: rgba(3,14,18,.92); box-shadow: 0 0 0 1px rgba(0,229,255,.16); }
+ html[data-theme=dark] ul.menu li:hover { background: #07222a; box-shadow: 0 0 0 1px rgba(0,229,255,.45); }
+ html[data-theme=dark] ul.menu li.head, html[data-theme=dark] ul.menu li.head:hover { background: none; box-shadow: none; }
+ html[data-theme=dark] ul.menu li.locked:hover { background: rgba(3,14,18,.92); box-shadow: 0 0 0 1px rgba(0,229,255,.16); }
+ html[data-theme=dark] ul.menu li.drop-above { box-shadow: 0 -3px 0 #00e5ff; }
+ html[data-theme=dark] ul.menu li.drop-below { box-shadow: 0 3px 0 #00e5ff; }
+ html[data-theme=dark] ul.menu li .app a, html[data-theme=dark] ul.menu li .app .noweb { color: #37e3fb; }
+ html[data-theme=dark] ul.menu li.off .app a { color: #5c7378; }
+ html[data-theme=dark] ul.menu li .app small { color: #8db9c1; }
+ html[data-theme=dark] ul.menu li .stat b { color: #e6fbff; }
+ html[data-theme=dark] ul.menu li .stat b i, html[data-theme=dark] ul.menu li .stat span,
+ html[data-theme=dark] ul.menu li .sw span { color: #6f9aa1; }
+ /* The heat colours are set inline for a light page: lift them off black. */
+ html[data-theme=dark] .heat { filter: brightness(1.75) saturate(1.15); }
+ html[data-theme=dark] ul.menu li .act button { border-color: #17505c; background: #04141a; color: #8fd6e0; }
+ html[data-theme=dark] ul.menu li .act.stop button:hover { background: #2a0a10; border-color: #ff6b7a; color: #ff6b7a; }
+ html[data-theme=dark] ul.menu li .act.start button:hover { background: #072a14; border-color: #4ade80; color: #4ade80; }
+ html[data-theme=dark] ul.menu li .act.restart button:hover,
+ html[data-theme=dark] ul.menu li .act.images button:hover { background: #062a33; border-color: #00e5ff; color: #00e5ff; }
+ html[data-theme=dark] ul.menu li .act .warn { background: #e11d2e; color: #fff; }
+ html[data-theme=dark] ul.menu li .act .warn.set { background: #0b3640; color: #7fe9f7; border: 0; }
+ html[data-theme=dark] ul.menu li .act .warn.set:hover { background: #0f4a57; }
+ html[data-theme=dark] ul.menu li .sw button { background: #22373c; }
+ html[data-theme=dark] ul.menu li .sw button::after { background: #d6f6fb; }
+ html[data-theme=dark] ul.menu li .sw button[aria-checked=true] { background: #00c8e0; }
+ html[data-theme=dark] ul.menu li .sw button[aria-checked=true]::after { background: #001318; }
+ html[data-theme=dark] ul.menu li .sw.public button[aria-checked=true] { background: #ff9f1c; }
+ html[data-theme=dark] ul.menu li .sw button:focus-visible { outline-color: #00e5ff; }
+ html[data-theme=dark] table, html[data-theme=dark] pre { background: rgba(3,14,18,.92); box-shadow: 0 0 0 1px rgba(0,229,255,.16); }
+ html[data-theme=dark] th, html[data-theme=dark] td { border-bottom-color: #0f3038; }
+ html[data-theme=dark] th { color: #6f9aa1; }
+ html[data-theme=dark] pre.fortune { border-left-color: #00e5ff; color: #a9d9e1; box-shadow: none; }
+ html[data-theme=dark] .ok { color: #4ade80; } html[data-theme=dark] .bad { color: #ff6b7a; }
+ html[data-theme=dark] form.nodedel button { border-color: #ff6b7a; background: none; color: #ff6b7a; }
+ html[data-theme=dark] form.nodedel button:hover { background: #ff6b7a; color: #000; }
+ html[data-theme=dark] footer { color: #5f8a91; }
+ /* dialogs */
+ html[data-theme=dark] :is(#rl, #im, #md) { background: #020b0e; color: #d6f6fb; box-shadow: 0 0 0 1px rgba(0,229,255,.45), 0 12px 48px rgba(0,229,255,.12); }
+ html[data-theme=dark] :is(#rl, #im, #md)::backdrop { background: rgba(0,0,0,.7); }
+ html[data-theme=dark] :is(#rl, #im, #md) h3 { color: #e9fdff; }
+ html[data-theme=dark] :is(#rl, #im, #md) p.note, html[data-theme=dark] #rl .rl-head, html[data-theme=dark] #rl .rl-vals,
+ html[data-theme=dark] #rl .rl-foot label, html[data-theme=dark] #md .md-pull, html[data-theme=dark] #md .md-keymsg { color: #8db9c1; }
+ html[data-theme=dark] #rl .rl-head b { color: #e6fbff; }
+ html[data-theme=dark] #rl .rl-vals b { color: #37e3fb; }
+ html[data-theme=dark] #rl .rl-track { background: #0f2a31; }
+ html[data-theme=dark] #rl .rl-band { border-color: #00e5ff; }
+ html[data-theme=dark] #rl .rl-peak { background: #ff6b7a; }
+ html[data-theme=dark] #rl .rl-slider input[type=range]::-webkit-slider-thumb { background: #001318; border-color: #00e5ff; }
+ html[data-theme=dark] #rl .rl-slider input[type=range]::-moz-range-thumb { background: #001318; border-color: #00e5ff; }
+ html[data-theme=dark] #rl .rl-list label, html[data-theme=dark] #im .im-w, html[data-theme=dark] #md .md-m { background: #07191e; }
+ html[data-theme=dark] #md .md-m.cur { background: #0b3640; }
+ html[data-theme=dark] #rl .rl-list small, html[data-theme=dark] #im .im-w .im-name small, html[data-theme=dark] #md .md-m small { color: #6f9aa1; }
+ html[data-theme=dark] #im .im-c code { color: #a9d9e1; }
+ html[data-theme=dark] :is(#rl, #im, #md) button, html[data-theme=dark] :is(#rl, #im, #md) select,
+ html[data-theme=dark] :is(#rl, #im, #md) input:not([type=checkbox]):not([type=range]) { background: #04141a; color: #d6f6fb; border-color: #17505c; }
+ html[data-theme=dark] :is(#rl, #im, #md) button:hover { border-color: #00e5ff; }
+ html[data-theme=dark] :is(#rl, #im, #md) button.go, html[data-theme=dark] #im .im-c button { background: #00c8e0; border-color: #00c8e0; color: #001318; }
+ html[data-theme=dark] :is(#rl, #im, #md) button:disabled, html[data-theme=dark] #im .im-c button:disabled { background: #17333a; border-color: #17333a; color: #5c7378; }
+ html[data-theme=dark] #rl .rl-err, html[data-theme=dark] #md .md-pull.err, html[data-theme=dark] #md .md-keymsg.err { color: #ff6b7a; }
+ /* the whiteboard */
+ html[data-theme=dark] #chat { background: rgba(2,10,13,.92); border-right-color: #00e5ff; color: #d6f6fb; box-shadow: 0 0 0 1px rgba(0,229,255,.16); }
+ html[data-theme=dark] #chat .chat-log .hint, html[data-theme=dark] #chat .msg.sys, html[data-theme=dark] #chat .msg.sys .nick,
+ html[data-theme=dark] #chat input::placeholder, html[data-theme=dark] #chat .msg.pending .body:empty::after { color: #5f8a91; }
+ html[data-theme=dark] #chat .msg .nick { color: #00e5ff; }
+ html[data-theme=dark] #chat .msg.bot { color: #a9d9e1; }
+ html[data-theme=dark] #chat .msg.bot .nick { color: #7ff3ff; }
+ html[data-theme=dark] #chat .msg.out { color: #d6f6fb; }
+ html[data-theme=dark] #chat .msg.out .nick { color: #4ade80; }
+ html[data-theme=dark] #chat .msg.note { color: #ff6b7a; }
+ html[data-theme=dark] #chat hr { border-top-color: #12363f; }
+ html[data-theme=dark] #chat input { color: #e9fdff; }
+ html[data-theme=dark] #chat form button.pen, html[data-theme=dark] #chat form button.rub,
+ html[data-theme=dark] #chat.away form button.model { color: #6f9aa1; }
+ html[data-theme=dark] #chat form button.pen:hover, html[data-theme=dark] #chat.drawing form button.pen,
+ html[data-theme=dark] #chat form button.model, html[data-theme=dark] #chat form button.model:hover { color: #00e5ff; }
+ html[data-theme=dark] #chat form button.rub:hover, html[data-theme=dark] #chat form button.rub:focus-visible { color: #ff6b7a; }
+ /* the splash */
+ html[data-theme=dark] #splash { background-color: #000; }
+ html[data-theme=dark] #splash svg { stroke: #00e5ff; }
+ html[data-theme=dark] #splash .bird { fill: #000; }
+ html[data-theme=dark] #splash .bird .eye { fill: #00e5ff; }
+ /* the corner's light/dark switch (both themes) */
+ .corner .theme { margin-top: 3px; }
+ .corner .theme a { color: #1a4d8f; text-decoration: none; cursor: pointer; }
+ .corner .theme a:hover { text-decoration: underline; }
+"""
+THEME_SWITCH = """<div class="theme"><a role="button" tabindex="0" id="theme-switch" title="switch between the light page and the dark one (remembered in this browser)"></a></div>
+<script>(function () {
+  var a = document.getElementById('theme-switch');
+  function label() { a.textContent = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; }
+  a.onclick = function () { aviaryTheme(); label(); };
+  a.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); a.onclick(); } };
+  label();
+})();</script>"""
+
+
 PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Aviary</title>
 <link rel="icon" href="/favicon.ico">
+{theme_js}
 <style>
  body {{ font: 16px/1.4 system-ui, sans-serif; margin: 0; color: #222;
         background-color: #fbfbf8;
@@ -2199,10 +2335,10 @@ PAGE = """<!doctype html>
    border: 1px solid #b00020; background: #fff; color: #b00020; }}
  form.nodedel button:hover {{ background: #b00020; color: #fff; }}
  footer {{ margin-top: 48px; color: #888; font-size: 13px; }}
-{rl_css}{splash_css}</style></head><body>{splash_html}<main>
+{rl_css}{splash_css}{dark_css}</style></head><body>{splash_html}<main>
 <div class="hdr">
 <nav><a href="/{ca_name}" download="{ca_name}" title="Cluster CA: trust this to stop the browser warnings">{ca_name}</a></nav>
-<div class="corner"><div class="host">{host}</div>{auth_nav}</div>
+<div class="corner"><div class="host">{host}</div>{auth_nav}{theme_switch}</div>
 </div>
 <h1>Aviary</h1>
 <div class="top"><div class="top-l">{fortune}</div>{chat}</div>
@@ -2512,8 +2648,11 @@ def logout():
         pass  # no cluster view: gitea's logout still happens
     issuer_logout = f"{OAUTH_ISSUER}/user/logout" if OAUTH_ISSUER else ""
     return (
-        "<!doctype html><meta charset=utf-8><title>Aviary</title>"
-        '<body style="font:16px/1.5 system-ui,sans-serif;text-align:center;padding:64px;color:#333">'
+        "<!doctype html><meta charset=utf-8><title>Aviary</title>" + THEME_JS +
+        "<style>body{font:16px/1.5 system-ui,sans-serif;text-align:center;padding:64px;color:#333}"
+        "html[data-theme=dark]{color-scheme:dark}html[data-theme=dark] body{background:#000;color:#d6f6fb}"
+        "html[data-theme=dark] a{color:#5eeaff}</style>"
+        "<body>"
         '<p id="msg">Logging out&hellip;</p>'
         '<p><a href="/login">Log in again</a></p>'
         + (f'<p style="font-size:13px;color:#777">Still signed in to gitea? '
@@ -2551,6 +2690,7 @@ FRONT_PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Aviary</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="/favicon.ico">
+{theme_js}
 <style>
  body {{ font: 16px/1.4 system-ui, sans-serif; margin: 0; color: #222; min-height: 100vh;
         display: flex; align-items: center; justify-content: center;
@@ -2572,6 +2712,20 @@ FRONT_PAGE = """<!doctype html>
  p.small {{ margin: 16px 0 0; font-size: 13px; color: #777; text-align: center; }}
  p.small a {{ color: #1a4d8f; text-decoration: none; }}
  p.small a:hover {{ text-decoration: underline; }}
+ html[data-theme=dark] {{ color-scheme: dark; }}
+ html[data-theme=dark] body {{ color: #d6f6fb; background-color: #000;
+   background-image:
+     linear-gradient(rgba(0,229,255,.20) 1px, transparent 1px),
+     linear-gradient(90deg, rgba(0,229,255,.20) 1px, transparent 1px),
+     linear-gradient(rgba(0,229,255,.07) 1px, transparent 1px),
+     linear-gradient(90deg, rgba(0,229,255,.07) 1px, transparent 1px); }}
+ html[data-theme=dark] h1 {{ color: #e9fdff; }}
+ html[data-theme=dark] .host {{ color: #9fd3dc; }}
+ html[data-theme=dark] pre.fortune {{ background: rgba(3,14,18,.92); border-left-color: #00e5ff; color: #a9d9e1; }}
+ html[data-theme=dark] a.go {{ background: #00c8e0; color: #001318; box-shadow: 0 0 18px rgba(0,229,255,.35); }}
+ html[data-theme=dark] a.go:hover {{ background: #37e3fb; }}
+ html[data-theme=dark] p.small {{ color: #6f9aa1; }}
+ html[data-theme=dark] p.small a {{ color: #5eeaff; }}
 </style></head><body><main>
 <h1>Aviary</h1>
 <div class="host">{host}</div>
@@ -2588,6 +2742,7 @@ def _front_page():
     fort = _fortune()
     response.set_header("Cache-Control", "no-store")
     return FRONT_PAGE.format(
+        theme_js=THEME_JS,
         host=html.escape(BASE_DOMAIN or request.get_header("Host", "")),
         fortune=f'<pre class="fortune">{html.escape(fort)}</pre>' if fort else "",
         ca=html.escape(CA_FILENAME),
@@ -2769,6 +2924,9 @@ def index():
         rl_html=RL_HTML + IMG_HTML,
         chat=_chat_html(d.get("gpus", 0)) if ROOM_ENABLED else "",
         splash_css=SPLASH_CSS,
+        dark_css=DARK_CSS,
+        theme_js=THEME_JS,
+        theme_switch=THEME_SWITCH,
         splash_html=SPLASH_HTML,
     )
 

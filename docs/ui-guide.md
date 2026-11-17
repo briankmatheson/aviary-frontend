@@ -138,6 +138,14 @@ From top to bottom, when signed in:
 
 ---
 
+**Light and dark.** Under the account line in the top right corner is a link
+reading **dark** (or **light**, when the page is already dark). It switches
+the whole page between the light look and a black-and-cyan one. Until it is
+clicked the page follows the system's light/dark setting; after that the
+choice is remembered in that browser. The front page and the logged-out page
+follow the same choice. Other apps (Gitea, Grafana and the rest) have their
+own themes and are not affected.
+
 ## 5. The whiteboard
 
 The box on the right is a shared chat room over a shared drawing surface.

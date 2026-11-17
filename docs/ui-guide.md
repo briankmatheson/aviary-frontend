@@ -320,6 +320,37 @@ to any browser. Mouse only.
 
 ---
 
+### 6.5 Where an app's entry comes from (AviaryApp)
+
+A row exists because the app has a route on the gateway. What the row says
+about it comes from an **AviaryApp** object in the cluster, named like the
+tile (`kubectl get aviaryapps`):
+
+| Field | Effect |
+|---|---|
+| `spec.description` | the line under the name |
+| `spec.group` | `apps` or `system`: which list the row is in, and whether its link and controls are for admins only |
+| `spec.web` | `false`: listed by name with no link (routed, but no page to open) |
+| `spec.namespaces` | further namespaces counted on the tile and reached by its Scale popup and restart |
+
+```yaml
+apiVersion: aviary.xdebbie.org/v1alpha1
+kind: AviaryApp
+metadata:
+  name: drone
+spec:
+  group: apps
+  description: Continuous integration
+  namespaces: [aviary-drone-builds]
+```
+
+Every field is optional and so is the object. Without one, the page falls
+back to the route's `aviary/group` label, namespaces labelled
+`aviary/app=<tile>`, and a list built into the page. A change shows within
+about fifteen seconds. Only people who can change cluster-wide objects can
+write these, which matters: moving an app from `system` to `apps` opens its
+row's controls to everyone signed in.
+
 ## 7. The SYSTEM list
 
 Platform services. The rows work like the Apps rows, with these differences:

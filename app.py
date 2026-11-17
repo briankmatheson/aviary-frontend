@@ -2388,32 +2388,43 @@ def login():
     redirect(f"{OAUTH_ISSUER}/login/oauth/authorize?{q}")
 
 
+def _login_again(why):
+    """A login that did not complete: it was overtaken by another tab's, its
+    code was already used (the callback reloaded, or two tabs finishing at
+    once), or it went stale. Someone who is logged in by now just goes to the
+    page; otherwise start over once, and only then say so."""
+    if _session_user():
+        redirect("/")
+    if not request.get_cookie("oauth_retry"):
+        response.set_cookie("oauth_retry", "1", httponly=True, secure=True, samesite="lax", max_age=60, path="/")
+        redirect("/login")
+    raise HTTPError(400, f"The login did not complete ({why}). Open the page again to retry.")
+
+
 @app.route("/oauth/callback")
 def oauth_callback():
     if not AUTH_ENABLED:
         redirect("/")
     saved = request.get_cookie("oauth_state", secret=SESSION_SECRET)
     if not saved or request.query.get("state") != saved:
-        # A login that was overtaken or went stale. Someone already logged in
-        # (another tab finished first) just goes to the page; otherwise start
-        # over once, and only then say so.
-        if _session_user():
-            redirect("/")
-        if not request.get_cookie("oauth_retry"):
-            response.set_cookie("oauth_retry", "1", httponly=True, secure=True, samesite="lax", max_age=60, path="/")
-            redirect("/login")
-        raise HTTPError(400, "The login did not complete (bad OAuth state). Open the page again to retry.")
+        _login_again("bad OAuth state")
     code = request.query.get("code", "")
     if not code:
-        raise HTTPError(400, "no authorization code")
-    tok = _http_post_form(f"{_GITEA_API}/login/oauth/access_token", {
-        "grant_type": "authorization_code", "client_id": OAUTH_CLIENT_ID,
-        "client_secret": OAUTH_CLIENT_SECRET, "code": code, "redirect_uri": REDIRECT_URI,
-    })
-    access = tok.get("access_token")
-    if not access:
-        raise HTTPError(502, "token exchange failed")
-    user = _http_get_json(f"{_GITEA_API}/api/v1/user", access)
+        _login_again("no authorization code")
+    try:
+        tok = _http_post_form(f"{_GITEA_API}/login/oauth/access_token", {
+            "grant_type": "authorization_code", "client_id": OAUTH_CLIENT_ID,
+            "client_secret": OAUTH_CLIENT_SECRET, "code": code, "redirect_uri": REDIRECT_URI,
+        })
+        access = tok.get("access_token")
+        user = _http_get_json(f"{_GITEA_API}/api/v1/user", access) if access else None
+    except urllib.error.HTTPError as e:
+        # gitea refused the code (400: used or expired) or the token.
+        _login_again(f"gitea answered {e.code}")
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise HTTPError(502, f"Could not reach gitea to finish the login ({e}). Try again in a moment.")
+    if not access or not user:
+        _login_again("gitea gave no token")
     username = user.get("login") or user.get("username") or "?"
     if ADMIN_ONLY and not user.get("is_admin"):
         raise HTTPError(403, f"{username} is not an admin")

@@ -1426,7 +1426,12 @@ CHAT_CSS = """
  #chat .chat-log { flex: 1 1 auto; position: relative; z-index: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
  #chat form button.pen { flex: 0 0 auto; margin-left: 10px; padding: 0 2px; border: 0; background: none; cursor: pointer;
    font: inherit; color: #999; }
+ #chat form button.pen { transition: transform .12s ease; transform-origin: 50% 60%; }
  #chat form button.pen:hover, #chat.drawing form button.pen { color: #1a4d8f; }
+ /* The marker is small until the pointer is on it (or it is in hand). */
+ #chat form button.pen:hover, #chat form button.pen:focus-visible { transform: scale(2.2); }
+ #chat.drawing form button.pen { transform: scale(1.5); }
+ #chat.drawing form button.pen:hover { transform: scale(2.2); }
  #chat .chat-log .hint { margin: auto; color: #999; font-style: italic; text-align: center; }
  #chat .msg { white-space: pre-wrap; overflow-wrap: anywhere; }
  #chat .msg .nick { color: #1a4d8f; }
@@ -1470,7 +1475,7 @@ CHAT_HTML = """
 <section id="chat" class="__CLASS__" aria-label="Whiteboard" data-hint="__HINT__" data-nick="__RAWNICK__" data-me="__ME__">
  <div class="board"><canvas aria-hidden="true"></canvas><div class="chat-log" aria-live="polite"></div></div>
  <hr>
- <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off" maxlength="4000"><button type="button" class="pen" title="draw on the whiteboard (click again to stop; /erase wipes the drawing)" aria-pressed="false">&#9998;</button><button type="button" class="model" title="choose or install a model">__NICK__ &#9662;</button></form>
+ <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off" maxlength="4000"><button type="button" class="pen" title="the marker: draw on the whiteboard (click again to put it down; /erase wipes the drawing)" aria-pressed="false">&#9998;</button><button type="button" class="model" title="choose or install a model">__NICK__ &#9662;</button></form>
 </section>
 <dialog id="md">
  <h3>Model</h3>
@@ -1637,7 +1642,8 @@ CHAT_HTML = """
   function say2(text, err) { pmsg.textContent = text; pmsg.classList.toggle('err', !!err); }
   function draw(d) {
     list.textContent = '';
-    if (!d.models.length) list.appendChild(el('div', 'md-m', 'No models installed yet.'));
+    if (d.note) list.appendChild(el('div', 'md-m', d.note));
+    else if (!d.models.length) list.appendChild(el('div', 'md-m', 'No models installed yet.'));
     d.models.forEach(function (m) {
       var row = el('div', 'md-m' + (m.name === d.current ? ' cur' : ''));
       row.appendChild(el('code', '', m.name));
@@ -1981,7 +1987,7 @@ PAGE = """<!doctype html>
           linear-gradient(rgba(70,130,180,.10) 1px, transparent 1px),
           linear-gradient(90deg, rgba(70,130,180,.10) 1px, transparent 1px);
         background-size: 100px 100px, 100px 100px, 20px 20px, 20px 20px; }}
- main {{ max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }}
+ main {{ max-width: 1040px; margin: 0 auto; padding: 32px 24px 64px; }}
  nav {{ font-size: 14px; margin-bottom: 8px; }}
  nav a {{ color: #1a4d8f; text-decoration: none; padding: 4px 10px; background: rgba(255,255,255,.85);
          border: 1px solid #d8dde5; border-radius: 6px; }}
@@ -2021,7 +2027,7 @@ PAGE = """<!doctype html>
  /* A fixed width, not a minimum: the heading line and the rows must agree, and
     a heading ("Disk Tput") is wider than most values. */
  ul.menu li .stat {{ text-align: right; flex: 0 0 76px; width: 76px; }}
- ul.menu li .stat.wide {{ flex-basis: 128px; width: 128px; }}
+ ul.menu li .stat.wide {{ flex-basis: 116px; width: 116px; }}
  ul.menu li .stat b i {{ font-style: normal; font-weight: 400; font-size: 12px; color: #888; white-space: nowrap; }}
  ul.menu li .stat b {{ display: block; font-size: 15px; color: #333; font-weight: 600; font-variant-numeric: tabular-nums; }}
  ul.menu li .stat span {{ font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: .5px; white-space: nowrap; }}
@@ -2370,8 +2376,8 @@ def _menu_head(shown, switches):
     a row so each heading sits over its column. `shown` is the exposure
     switches the rows carry; the System list has their columns but no
     switches, so no headings for them (switches=False)."""
-    stats = "".join(f'<div class="stat{" wide" if t in ("CPU", "Memory") else ""}"><span>{t}{" now / max" if t in ("CPU", "Memory") else ""}</span></div>'
-                    for t in ("CPU", "Memory", "Disk Cap", "Disk Tput", "Disk IOPS"))
+    stats = "".join(f'<div class="stat{" wide" if t in ("CPU", "Mem") else ""}"><span>{t}{" now / max" if t in ("CPU", "Mem") else ""}</span></div>'
+                    for t in ("CPU", "Mem", "Disk Cap", "Disk Tput", "Disk IOPS"))
     sw = "".join(f'<div class="sw"><span>{key if switches else ""}</span></div>' for key, _ in shown)
     return (f'<li class="head" aria-hidden="true"><div class="app"></div><div class="stats">{stats}</div>'
             f'<div class="act"></div><div class="act"></div><div class="act"></div><div class="act"></div>{sw}</li>')
@@ -2729,9 +2735,7 @@ def chat_models():
             with _ollama("/api/tags") as r:
                 tags = json.loads(r.read().decode())
         except Exception:
-            if not CLAUDE_ENABLED:
-                raise
-            tags = {}   # Ollama is not answering: Claude can still be chosen
+            tags = {}   # Ollama is not answering (no GPU: it is not running). The menu says so.
         models = sorted((
             {"name": m["name"], "size": m.get("size", 0),
              "detail": " ".join(filter(None, [(m.get("details") or {}).get("parameter_size", ""),
@@ -3412,6 +3416,11 @@ def _chat_away(fresh=False):
     unless `fresh`."""
     if chat_is_claude():
         return False   # Claude runs at Anthropic: no GPU here to be without
+    return _chat_away_gpu(fresh)
+
+
+def _chat_away_gpu(fresh=False):
+    """No GPU in the cluster (as the page's snapshot has it)."""
     return not ((snapshot() if fresh else _cache.get("data")) or {}).get("gpus")
 
 
@@ -3542,10 +3551,17 @@ def api_chat_models():
     try:
         models = chat_models()
     except Exception as e:
-        return _chat_error(502, f"cannot list models (is CHAT_URL an Ollama?): {e}\n")
+        return _chat_error(502, f"cannot list models: {e}\n")
+    # With Ollama not answering there is nothing of its own to list. That is
+    # the usual state with no GPU in the cluster (its pod cannot start), so the
+    # menu opens and says so rather than failing.
+    note = ""
+    if CHAT_ENABLED and not any(m["name"] != CLAUDE_CHOICE for m in models):
+        note = ("The cluster's own models are not available: there is no GPU for them to run on."
+                if _chat_away_gpu() else "The cluster's model server (Ollama) is not answering, or has no models installed.")
     response.content_type = "application/json"
     response.set_header("Cache-Control", "no-store")
-    return json.dumps({"current": chat_model(), "nick": chat_nick(), "models": models, "pull": _pull or None})
+    return json.dumps({"current": chat_model(), "nick": chat_nick(), "models": models, "note": note, "pull": _pull or None})
 
 
 @app.route("/api/chat/model", method="POST")

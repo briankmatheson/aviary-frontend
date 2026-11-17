@@ -85,6 +85,11 @@ BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")             # https://<bas
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
 BYPASS_TOKEN = os.environ.get("BYPASS_TOKEN", "")
 ADMIN_ONLY = os.environ.get("OAUTH_ADMIN_ONLY", "false").lower() in ("1", "true", "yes")
+# How long a login to this page lasts before it goes back through gitea. Short
+# on purpose: gitea has no way to tell us someone logged out there (or lost
+# their admin team), so that takes effect when the session next runs out. With
+# gitea still signed in, the trip back is a redirect nobody notices.
+SESSION_SECONDS = max(1, int(os.environ.get("SESSION_MINUTES", "30"))) * 60
 # Who counts as an admin on this page, besides gitea's site administrators:
 # members of this gitea team ("org:team"). The gateway's gates in front of the
 # System apps go by the same team (the groups claim of gitea's ID token).
@@ -1852,8 +1857,12 @@ PAGE = """<!doctype html>
       e.preventDefault();
   }});
   function tick() {{
-    fetch('/api/nodes', {{ credentials: 'same-origin' }})
-      .then(function (r) {{ return r.ok ? r.text() : Promise.reject(r.status); }})
+    fetch('/api/nodes', {{ credentials: 'same-origin', redirect: 'manual' }})
+      .then(function (r) {{
+        // Sent to /login: the session ran out. Reload, which goes back through gitea.
+        if (r.type === 'opaqueredirect' || r.status === 401) {{ location.reload(); return Promise.reject(401); }}
+        return r.ok ? r.text() : Promise.reject(r.status);
+      }})
       .then(function (h) {{ if (h !== last) {{ tb.innerHTML = h; last = h; }} }})
       .catch(function () {{}})
       .finally(function () {{ setTimeout(tick, 200); }});
@@ -1891,25 +1900,33 @@ def _bypass_ok():
     return bool(tok) and hmac.compare_digest(tok, BYPASS_TOKEN)
 
 
-def _session_user():
+def _session():
+    """The signed session cookie, if it is one of ours and has not run out:
+    {"u": gitea login, "a": admin, "x": expiry}. The expiry is inside the
+    signed value, so it holds whatever the browser does with the cookie."""
     try:
-        return request.get_cookie("aviary_session", secret=SESSION_SECRET)
+        s = json.loads(request.get_cookie("aviary_session", secret=SESSION_SECRET) or "")
+        if isinstance(s, dict) and s.get("u") and float(s.get("x", 0)) > time.time():
+            return s
     except Exception:
-        return None
+        pass
+    return None
+
+
+def _session_user():
+    s = _session()
+    return s["u"] if s else None
 
 
 def _is_admin():
     """Whether the person asking is an admin: a gitea site administrator or a
-    member of ADMIN_TEAM (as gitea said at login; a session from before this
-    was recorded counts as not). With
+    member of ADMIN_TEAM (as gitea said at login). With
     login off, or with the bypass token, everyone is: there is nobody to tell
     apart."""
     if not AUTH_ENABLED or _bypass_ok():
         return True
-    try:
-        return request.get_cookie("aviary_admin", secret=SESSION_SECRET) == "1"
-    except Exception:
-        return False
+    s = _session()
+    return bool(s and s.get("a"))
 
 
 def _gitea_admin(user, access):
@@ -1994,10 +2011,10 @@ def oauth_callback():
     if ADMIN_ONLY and not user.get("is_admin"):
         raise HTTPError(403, f"{username} is not an admin")
     response.delete_cookie("oauth_state", path="/")
-    response.set_cookie("aviary_session", username, secret=SESSION_SECRET, httponly=True,
-                        secure=True, samesite="lax", max_age=43200, path="/")
-    response.set_cookie("aviary_admin", "1" if _gitea_admin(user, access) else "0", secret=SESSION_SECRET,
-                        httponly=True, secure=True, samesite="lax", max_age=43200, path="/")
+    session = {"u": username, "a": bool(_gitea_admin(user, access)), "x": int(time.time()) + SESSION_SECONDS}
+    response.set_cookie("aviary_session", json.dumps(session), secret=SESSION_SECRET, httponly=True,
+                        secure=True, samesite="lax", max_age=SESSION_SECONDS, path="/")
+    response.delete_cookie("aviary_admin", path="/", secure=True, samesite="lax")   # pre-session-expiry cookie
     redirect("/")
 
 

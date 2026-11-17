@@ -28,6 +28,11 @@ The rows of each list can be dragged into another order. The order is each
 person's own, kept per gitea login in the `aviary-menu-order` ConfigMap
 (`MENU_ORDER_CONFIGMAP`), so it follows them to any browser.
 
+Every row has a **scale** button (`!` while containers lack requests or
+limits, an arrow otherwise): the namespace's default requests and limits, and
+the number of pods of each Deployment and StatefulSet (0 to `SCALE_MAX`,
+default 10). A helm upgrade puts a chart's own number back.
+
 CPU and memory read `now / max`: what an app is using, and its high-water mark
 (the peak over `PEAK_WINDOW`, default `7d`, from Prometheus when
 `PROMETHEUS_URL` is set; otherwise the most seen since this page started).

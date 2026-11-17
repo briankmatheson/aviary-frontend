@@ -1971,7 +1971,11 @@ def _auth_gate():
         return
     if _bypass_ok() or _session_user():
         return
-    if request.method == "GET":
+    # Only a page someone is opening goes off to log in. The page's own polls
+    # (/api/...) get a plain 401: sent to /login they would each restart the
+    # login behind the back of the one already under way.
+    if request.method == "GET" and not request.path.startswith("/api/") \
+            and request.get_header("Sec-Fetch-Mode", "navigate") == "navigate":
         redirect("/login")
     raise HTTPError(401, "authentication required\n")
 
@@ -1980,7 +1984,14 @@ def _auth_gate():
 def login():
     if not AUTH_ENABLED:
         redirect("/")
-    state = secrets.token_urlsafe(16)
+    # One state per browser, not per attempt: several tabs logging in at once
+    # (they all do when a session runs out) share it instead of each
+    # invalidating the others'.
+    try:
+        state = request.get_cookie("oauth_state", secret=SESSION_SECRET)
+    except Exception:
+        state = None
+    state = state or secrets.token_urlsafe(16)
     response.set_cookie("oauth_state", state, secret=SESSION_SECRET, httponly=True,
                         secure=True, samesite="lax", max_age=600, path="/")
     q = urllib.parse.urlencode({
@@ -1996,7 +2007,15 @@ def oauth_callback():
         redirect("/")
     saved = request.get_cookie("oauth_state", secret=SESSION_SECRET)
     if not saved or request.query.get("state") != saved:
-        raise HTTPError(400, "bad OAuth state")
+        # A login that was overtaken or went stale. Someone already logged in
+        # (another tab finished first) just goes to the page; otherwise start
+        # over once, and only then say so.
+        if _session_user():
+            redirect("/")
+        if not request.get_cookie("oauth_retry"):
+            response.set_cookie("oauth_retry", "1", httponly=True, secure=True, samesite="lax", max_age=60, path="/")
+            redirect("/login")
+        raise HTTPError(400, "The login did not complete (bad OAuth state). Open the page again to retry.")
     code = request.query.get("code", "")
     if not code:
         raise HTTPError(400, "no authorization code")
@@ -2012,6 +2031,7 @@ def oauth_callback():
     if ADMIN_ONLY and not user.get("is_admin"):
         raise HTTPError(403, f"{username} is not an admin")
     response.delete_cookie("oauth_state", path="/")
+    response.delete_cookie("oauth_retry", path="/")
     session = {"u": username, "a": bool(_gitea_admin(user, access)), "x": int(time.time()) + SESSION_SECONDS}
     response.set_cookie("aviary_session", json.dumps(session), secret=SESSION_SECRET, httponly=True,
                         secure=True, samesite="lax", max_age=SESSION_SECONDS, path="/")

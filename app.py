@@ -443,6 +443,67 @@ def gpu_count():
 # namespaces labelled aviary/app, and the lists built in above.
 APPS_API = ("aviary.xdebbie.org", "v1alpha1", "aviaryapps")
 
+# Page-wide settings come from the one AviaryConfig object, named "aviary"
+# (cluster-scoped, same group):
+#
+#   spec.session.minutes   how long a sign-in to this page lasts
+#   spec.admin.team        a gitea team ("org:team") whose members are admins
+#                          here besides the site administrators
+#   spec.scale.maxPods     the most pods the Scale popup will set on a workload
+#   spec.chat.briefing     what the whiteboard's model is told about this place
+#   status.chat.model      the model chosen in the whiteboard's menu (written
+#                          by this page)
+#
+# Every field is optional and so is the object: what it does not say comes
+# from the environment (SESSION_MINUTES, ADMIN_TEAM, SCALE_MAX) and the chat
+# ConfigMap, as before. Re-read every CONFIG_TTL seconds.
+CONFIG_API = ("aviary.xdebbie.org", "v1alpha1", "aviaryconfigs")
+CONFIG_NAME = os.environ.get("AVIARY_CONFIG", "aviary")
+CONFIG_TTL = 30
+_config = {"at": 0.0, "obj": None}
+_configlock = threading.Lock()
+
+
+def aviary_config(fresh=False):
+    """The AviaryConfig object as a dict, or {} when there is none (or no CRD,
+    or no right to read it). A read that fails keeps the last one in hand."""
+    with _configlock:
+        if fresh or time.time() - _config["at"] > CONFIG_TTL:
+            _config["at"] = time.time()
+            try:
+                _config["obj"] = client.CustomObjectsApi().get_cluster_custom_object(*CONFIG_API, CONFIG_NAME)
+            except client.exceptions.ApiException as e:
+                if e.status == 404:
+                    _config["obj"] = None   # no object (or no CRD): the fallbacks
+            except Exception:
+                pass
+        return _config["obj"] or {}
+
+
+def _setting(path, default, lo=None, hi=None):
+    """spec.<path> of the AviaryConfig, else default. Numbers are kept within
+    lo..hi; a value of the wrong type is ignored."""
+    v = aviary_config().get("spec") or {}
+    for k in path.split("."):
+        v = v.get(k) if isinstance(v, dict) else None
+    if v is None or type(v) is not type(default):
+        return default
+    if lo is not None:
+        v = max(lo, min(hi, v))
+    return v
+
+
+def session_seconds():
+    return _setting("session.minutes", SESSION_SECONDS // 60, 1, 1440) * 60
+
+
+def admin_team():
+    return _setting("admin.team", ADMIN_TEAM).strip().lower()
+
+
+def scale_max():
+    return _setting("scale.maxPods", SCALE_MAX, 1, 100)
+
 
 def aviary_apps():
     """{tile name: spec} for every AviaryApp; {} when there are none, the CRD
@@ -926,7 +987,7 @@ def app_resources(ns):
         except client.exceptions.ApiException:
             pass
     out["namespaces"] = nss
-    out["scale_max"] = SCALE_MAX
+    out["scale_max"] = scale_max()
     return out
 
 
@@ -961,8 +1022,8 @@ def scale_workloads(ns, wanted):
     for key, n in wanted.items():
         if key not in now:
             raise ValueError(f"no {key[0]} {key[2]} in {key[1]}")
-        if not 0 <= n <= SCALE_MAX:
-            raise ValueError(f"{key[2]}: pods must be between 0 and {SCALE_MAX}")
+        if not 0 <= n <= scale_max():
+            raise ValueError(f"{key[2]}: pods must be between 0 and {scale_max()}")
         if n != now[key]:
             patch[key[0]](key[2], key[1], {"spec": {"replicas": n}})
             changed += 1
@@ -2592,11 +2653,12 @@ def _gitea_admin(user, access):
     counts as not a member."""
     if user.get("is_admin"):
         return True
-    if not ADMIN_TEAM:
+    team = admin_team()
+    if not team:
         return False
     try:
         teams = _http_get_json(f"{_GITEA_API}/api/v1/user/teams?limit=50", access)
-        return any(f"{(t.get('organization') or {}).get('username', '')}:{t.get('name', '')}".lower() == ADMIN_TEAM
+        return any(f"{(t.get('organization') or {}).get('username', '')}:{t.get('name', '')}".lower() == team
                    for t in teams)
     except Exception:
         return False
@@ -2709,9 +2771,9 @@ def oauth_callback():
     # Marks a browser that has logged in here (nothing more): see _auth_gate.
     response.set_cookie("aviary_seen", "1", httponly=True, secure=True, samesite="lax",
                         max_age=30 * 86400, path="/")
-    session = {"u": username, "a": bool(_gitea_admin(user, access)), "x": int(time.time()) + SESSION_SECONDS}
+    session = {"u": username, "a": bool(_gitea_admin(user, access)), "x": int(time.time()) + session_seconds()}
     response.set_cookie("aviary_session", json.dumps(session), secret=SESSION_SECRET, httponly=True,
-                        secure=True, samesite="lax", max_age=SESSION_SECONDS, path="/")
+                        secure=True, samesite="lax", max_age=session_seconds(), path="/")
     response.delete_cookie("aviary_admin", path="/", secure=True, samesite="lax")   # pre-session-expiry cookie
     redirect("/")
 
@@ -3092,7 +3154,10 @@ def claude_key_set(key):
 def chat_model():
     if not _chosen["loaded"]:
         _chosen["loaded"] = True
-        if CHAT_STATE_CONFIGMAP:
+        cfg = aviary_config()
+        if cfg and ((cfg.get("status") or {}).get("chat") or {}).get("model"):
+            _chosen["model"] = cfg["status"]["chat"]["model"]
+        elif CHAT_STATE_CONFIGMAP:
             try:
                 cm = client.CoreV1Api().read_namespaced_config_map(CHAT_STATE_CONFIGMAP, self_namespace())
                 _chosen["model"] = (cm.data or {}).get("model", "")
@@ -3227,6 +3292,17 @@ def _arranged(rows, order):
 def _chat_choose(model):
     """Switch the room to `model` and remember it."""
     _chosen.update(loaded=True, model=model)
+    if aviary_config(fresh=True):
+        # Kept in the AviaryConfig's status. If that cannot be written (no
+        # right to, say), the ConfigMap below still remembers it.
+        try:
+            client.CustomObjectsApi().patch_cluster_custom_object_status(
+                *CONFIG_API, CONFIG_NAME, {"status": {"chat": {"model": model}}})
+            with _configlock:
+                _config["at"] = 0.0
+            return
+        except Exception:
+            pass
     if not CHAT_STATE_CONFIGMAP:
         return
     v1, ns = client.CoreV1Api(), self_namespace()
@@ -4069,6 +4145,9 @@ def _chat_briefing():
     sign-in works, what each thing is for, who to ask. It is the `briefing` key
     of the chat ConfigMap, so it is edited with kubectl, not a rebuild; re-read
     once a minute. No ConfigMap or no key: nothing."""
+    given = _setting("chat.briefing", "").strip()
+    if given:
+        return given[:CHAT_BRIEFING_MAX]   # the AviaryConfig's, when it has one
     if not CHAT_STATE_CONFIGMAP:
         return ""
     if time.time() - _briefing["at"] > 60:

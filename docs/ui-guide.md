@@ -362,6 +362,25 @@ about fifteen seconds. Only people who can change cluster-wide objects can
 write these, which matters: moving an app from `system` to `apps` opens its
 row's controls to everyone signed in.
 
+### 6.6 Page-wide settings (AviaryConfig)
+
+The page's own settings are one **AviaryConfig** object named `aviary`
+(`kubectl get aviaryconfig`, `kubectl edit aviaryconfig aviary`):
+
+| Field | Effect |
+|---|---|
+| `spec.session.minutes` | how long a sign-in to the landing page lasts (1 to 1440) |
+| `spec.admin.team` | a Gitea team, `org:team`, whose members are admins here besides the site administrators; leave it out for site administrators only |
+| `spec.scale.maxPods` | the most pods the Scale popup will set on one workload |
+| `spec.chat.briefing` | what the whiteboard's model is told about this place |
+| `status.chat.model` | the model chosen in the whiteboard's menu; the page writes this |
+
+A change is picked up within about thirty seconds (a new session length
+applies to sign-ins from then on). Anything the object leaves out comes
+from the page's environment variables and the older `aviary-chat`
+ConfigMap, so the page also runs without the object. Passwords and keys are
+not kept here: they stay in Secrets.
+
 ## 7. The SYSTEM list
 
 Platform services. The rows work like the Apps rows, with these differences:

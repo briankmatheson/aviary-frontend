@@ -229,6 +229,15 @@ a small triangle) to open the **Model** dialog.
 
 ---
 
+**none.** The last entry in the menu is **none**: no model answers. The room
+stays open (people can talk, `/k` and the drawing work), the button reads
+**no model**, and the input says *no model is listening*. Choosing it also
+shuts the cluster's own model server (Ollama) off, by setting it to run no
+pods, which frees its memory and GPU. While it is off the menu cannot list
+Ollama's models; it shows the default one with the note *starts the
+cluster's model server*, and choosing that starts it again (allow a minute or
+more for the model to load). Choosing Claude leaves the server as it is.
+
 ## 6. The APPS list
 
 Each row is one app. The columns, left to right:

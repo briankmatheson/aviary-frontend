@@ -42,6 +42,7 @@ import math
 import os
 import re
 import secrets
+import shlex
 import shutil
 import ssl
 import subprocess
@@ -1503,6 +1504,8 @@ CHAT_CSS = """
  #chat .msg.bot { color: #555; font-style: italic; }
  #chat .msg.bot .nick { color: #4682b4; font-style: normal; }
  #chat .msg.pending .body:empty::after { content: "\\2026"; color: #999; }
+ #chat .msg.out { white-space: pre; overflow-x: auto; flex: 0 0 auto; color: #333; font-size: 12px; padding-bottom: 2px; }
+ #chat .msg.out .nick { color: #1b7f3b; }
  #chat .msg.note { color: #b00020; font-style: italic; }
  #chat hr { flex: 0 0 auto; border: 0; border-top: 1px solid #c5d0db; margin: 0 14px; }
  #chat form { flex: 0 0 auto; display: flex; margin: 0; padding: 8px 14px 10px; }
@@ -1561,7 +1564,8 @@ CHAT_HTML = """
 // everyone on the page: this polls /api/chat for lines and strokes that are
 // new or have changed since the revision it last saw (a reply grows in place),
 // and says things by POSTing them. /clear empties the board for everybody,
-// /erase wipes only the drawing; /stop (or Escape) cuts a reply short.
+// /erase wipes only the drawing; /stop (or Escape) cuts a reply short; /k ...
+// reads the cluster the way kubectl would and posts what it finds.
 (function () {
   var box = document.getElementById('chat');
   if (!box || !window.fetch) return;
@@ -1591,7 +1595,8 @@ CHAT_HTML = """
     var row = rows[m.id];
     if (!row) {
       // A notice (nick "*") reads as an IRC action line: "* bmath switched ...".
-      row = rows[m.id] = line(m.nick === '*' ? 'sys' : m.bot ? 'bot' : 'user');
+      // "k" is the /k command's answer: output, to be read as a terminal would show it.
+      row = rows[m.id] = line(m.nick === '*' ? 'sys' : m.bot && m.nick === 'k' ? 'out' : m.bot ? 'bot' : 'user');
       var n = document.createElement('span'); n.className = 'nick';
       n.textContent = m.nick === '*' ? '* ' : '<' + m.nick + '> ';
       var b = document.createElement('span'); b.className = 'body';
@@ -3080,6 +3085,206 @@ def chat_kubernetes_get(path, fmt="table"):
     return _clip(json.dumps(_strip_noise(obj), indent=1))
 
 
+# /k in the whiteboard: kubectl's reading half, typed into the room. It goes
+# through chat_kubernetes_get, so it sees what the room's model may see -- the
+# read-only account, no Secrets -- and its answer is posted for everyone.
+K_HELP = """k reads the cluster (read-only, no Secrets). Like kubectl, except that
+without -n it looks in every namespace.
+  /k get RESOURCE [NAME] [-n NS] [-l SELECTOR] [-o json|yaml|name]
+  /k describe RESOURCE NAME [-n NS]     the object, as yaml
+  /k logs POD [-n NS] [-c CONTAINER] [--tail N] [-p]
+  /k top nodes | pods [-n NS]
+  /k events [-n NS]
+  /k api-resources
+e.g.  /k get pods -n aviary-gitea    /k get deploy    /k logs gitea-0 --tail 20"""
+K_READS = ("get", "describe", "logs", "top", "events", "api-resources", "version", "help")
+K_OUT_CHARS = 6000
+_kres = {"at": 0.0, "byname": {}, "rows": []}
+_kreslock = threading.Lock()
+
+
+def _k_resources():
+    """({name or short name or kind: resource}, [resource]) from API discovery,
+    as the read-only account sees it; cached for ten minutes. A resource is
+    {name, kind, short, namespaced, base} with base the API path it lives under."""
+    with _kreslock:
+        if time.time() - _kres["at"] < 600 and _kres["rows"]:
+            return _kres["byname"], _kres["rows"]
+        bases = ["/api/v1"]
+        try:
+            groups = json.loads(chat_kubernetes_get("/apis", "json")).get("groups", [])
+            bases += ["/apis/" + g["preferredVersion"]["groupVersion"] for g in groups]
+        except Exception:
+            pass
+        rows, byname = [], {}
+        for base in bases:
+            try:
+                found = json.loads(chat_kubernetes_get(base, "json")).get("resources", [])
+            except Exception:
+                continue
+            group = base.split("/")[2] if base.startswith("/apis/") else ""
+            for r in found:
+                if "/" in r["name"] or "list" not in (r.get("verbs") or []):
+                    continue   # subresources, and things that cannot be listed
+                res = {"name": r["name"], "kind": r.get("kind", ""), "short": r.get("shortNames") or [],
+                       "namespaced": bool(r.get("namespaced")), "base": base, "group": group}
+                rows.append(res)
+                names = [r["name"], r.get("singularName") or "", r.get("kind", "").lower()] + res["short"]
+                for n in filter(None, names):
+                    byname.setdefault(n.lower(), res)                       # core and earlier groups win a bare name
+                    byname.setdefault(f"{n.lower()}.{group}", res)          # pods.metrics.k8s.io
+        if rows:
+            _kres.update(at=time.time(), byname=byname, rows=rows)
+        return byname, rows
+
+
+def _k_find_namespace(res, name):
+    """The namespace of the one object of this kind called `name`, when no -n
+    was given: (namespace, None) or (None, why not)."""
+    out = chat_kubernetes_get(f"{res['base']}/{res['name']}?fieldSelector=metadata.name%3D{urllib.parse.quote(name)}", "json")
+    try:
+        found = sorted({i["metadata"].get("namespace", "") for i in json.loads(out).get("items", [])})
+    except ValueError:
+        return None, out
+    if len(found) == 1:
+        return found[0], None
+    if not found:
+        return None, f"error: no {res['name']} called {name} in any namespace"
+    return None, f"error: {name} exists in several namespaces ({', '.join(found)}): say which with -n"
+
+
+def k_command(line):
+    """Run one /k line; the text to post in the room."""
+    try:
+        args = shlex.split(line)
+    except ValueError as e:
+        return f"error: {e}"
+    if not args or args[0] in ("help", "-h", "--help"):
+        return K_HELP
+    verb, rest = args[0], args[1:]
+    if verb not in K_READS:
+        return (f"k here only reads: {', '.join(v for v in K_READS if v != 'help')}. "
+                f"'{verb}' would change or enter something, which this room cannot do.")
+    # flags
+    ns, allns, out, sel, fsel, tail, container, previous, pos = None, False, "", "", "", "50", "", False, []
+    it = iter(rest)
+    for a in it:
+        if a in ("-n", "--namespace"):
+            ns = next(it, None)
+        elif a.startswith("--namespace="):
+            ns = a.split("=", 1)[1]
+        elif a.startswith("-n") and len(a) > 2 and not a.startswith("--"):
+            ns = a[2:]
+        elif a in ("-A", "--all-namespaces"):
+            allns = True
+        elif a in ("-o", "--output"):
+            out = next(it, "") or ""
+        elif a.startswith(("-o=", "--output=")):
+            out = a.split("=", 1)[1]
+        elif a.startswith("-o") and len(a) > 2 and not a.startswith("--"):
+            out = a[2:]
+        elif a in ("-l", "--selector"):
+            sel = next(it, "") or ""
+        elif a.startswith(("-l=", "--selector=")):
+            sel = a.split("=", 1)[1]
+        elif a == "--field-selector":
+            fsel = next(it, "") or ""
+        elif a.startswith("--field-selector="):
+            fsel = a.split("=", 1)[1]
+        elif a == "--tail":
+            tail = next(it, "50") or "50"
+        elif a.startswith("--tail="):
+            tail = a.split("=", 1)[1]
+        elif a in ("-c", "--container"):
+            container = next(it, "") or ""
+        elif a.startswith("--container="):
+            container = a.split("=", 1)[1]
+        elif a in ("-p", "--previous"):
+            previous = True
+        elif a in ("-w", "--watch", "-f", "--follow"):
+            return "error: k here answers once: it cannot watch or follow"
+        elif a.startswith("-"):
+            return f"error: k here does not know the flag {a}"
+        else:
+            pos.append(a)
+    if ns is not None and not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", ns or ""):
+        return "error: -n needs a namespace name"
+    q = lambda **kw: "?" + urllib.parse.urlencode({k: v for k, v in kw.items() if v}) if any(kw.values()) else ""
+
+    if verb == "version":
+        return chat_kubernetes_get("/version", "json")
+    if verb == "api-resources":
+        _, rows = _k_resources()
+        if not rows:
+            return "error: could not read the API's resource list"
+        table = [("NAME", "SHORTNAMES", "GROUP", "NAMESPACED", "KIND")] + sorted(
+            (r["name"], ",".join(r["short"]), r["group"], str(r["namespaced"]).lower(), r["kind"]) for r in rows)
+        width = [max(len(row[i]) for row in table) for i in range(5)]
+        return "\n".join("  ".join(v.ljust(w) for v, w in zip(row, width)).rstrip() for row in table) + f"\n({len(rows)} rows)"
+    if verb == "events":
+        base = f"/api/v1/namespaces/{ns}/events" if ns else "/api/v1/events"
+        return chat_kubernetes_get(base + q(fieldSelector=fsel))
+    if verb == "top":
+        what = (pos[0] if pos else "").lower()
+        if what in ("node", "nodes", "no"):
+            return chat_kubernetes_get("/apis/metrics.k8s.io/v1beta1/nodes")
+        if what in ("pod", "pods", "po"):
+            return chat_kubernetes_get(f"/apis/metrics.k8s.io/v1beta1/namespaces/{ns}/pods" if ns else "/apis/metrics.k8s.io/v1beta1/pods")
+        return "error: k top nodes, or k top pods [-n NS]"
+    if verb == "logs":
+        if not pos:
+            return "error: k logs POD [-n NS] [-c CONTAINER] [--tail N]"
+        pod = pos[0].split("/", 1)[-1]
+        if not tail.isdigit() or not 0 < int(tail) <= 2000:
+            return "error: --tail takes a number of lines, 1 to 2000"
+        byname, _ = _k_resources()
+        if not ns:
+            ns, why = _k_find_namespace(byname.get("pods") or {"base": "/api/v1", "name": "pods"}, pod)
+            if why:
+                return why
+        return chat_kubernetes_get(f"/api/v1/namespaces/{ns}/pods/{urllib.parse.quote(pod)}/log"
+                                   + q(tailLines=tail, container=container, previous="true" if previous else ""))
+
+    # get / describe
+    if not pos:
+        return f"error: k {verb} RESOURCE [NAME]: which resource? (k api-resources lists them)"
+    kind, name = pos[0], (pos[1] if len(pos) > 1 else "")
+    if "/" in kind and not name:
+        kind, name = kind.split("/", 1)
+    if len(pos) > 2 or "," in kind:
+        return "error: one resource (and at most one name) at a time"
+    byname, _ = _k_resources()
+    res = byname.get(kind.lower())
+    if not res:
+        return f"error: no resource type called {kind} (k api-resources lists them)"
+    if verb == "describe" and not name:
+        return "error: k describe RESOURCE NAME"
+    if out not in ("", "json", "yaml", "name", "wide"):
+        return "error: -o takes json, yaml or name"
+    if res["namespaced"] and name and not ns:
+        ns, why = _k_find_namespace(res, name)
+        if why:
+            return why
+    path = res["base"] + (f"/namespaces/{ns}" if res["namespaced"] and ns and not allns else "") + "/" + res["name"]
+    if name:
+        path += "/" + urllib.parse.quote(name)
+    else:
+        path += q(labelSelector=sel, fieldSelector=fsel)
+    if verb == "get" and out in ("", "wide"):
+        return chat_kubernetes_get(path)
+    got = chat_kubernetes_get(path, "json")
+    try:
+        obj = json.loads(got)
+    except ValueError:
+        return got   # an error line, or output already cut for length
+    if out == "name":
+        items = obj.get("items") if isinstance(obj.get("items"), list) else [obj]
+        return "\n".join(f"{res['name']}/{i['metadata']['name']}" for i in items) or "(none)"
+    if out == "json":
+        return got
+    return _clip(yaml.safe_dump(obj, default_flow_style=False, sort_keys=False).rstrip(), K_OUT_CHARS)
+
+
 _TAGS = re.compile(r"(?is)<(script|style|noscript|svg|head)\b.*?</\1>|<!--.*?-->|<[^>]+>")
 
 
@@ -3847,6 +4052,20 @@ def api_chat():
         with _roomlock:
             _room.update(epoch=secrets.token_hex(4), msgs=[], stop=True, told=False, strokes=[])
             _room["rev"] += 1
+        return "ok\n"
+    if text == "/k" or text.startswith("/k "):
+        # The line is said, then answered by k: for everyone, and for the
+        # model to read afterwards. No reply from the model: it was not asked.
+        with _roomlock:
+            _room_say(_chat_nick(), text)
+            epoch = _room["epoch"]
+        try:
+            answer = _clip(k_command(text[2:].strip()), K_OUT_CHARS)
+        except Exception as e:
+            answer = f"error: {e}"
+        with _roomlock:
+            if _room["epoch"] == epoch:
+                _room_say("k", answer or "(nothing)", bot=True)
         return "ok\n"
     if text == "/erase":
         with _roomlock:

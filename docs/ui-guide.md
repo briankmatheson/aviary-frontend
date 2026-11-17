@@ -165,6 +165,7 @@ Commands, typed as a line:
 | `/clear` | Empties the whole board (lines and drawing) for everybody |
 | `/erase` | Wipes the drawing only, keeps the lines |
 | `/stop` (or press Escape while a reply is being written) | Cuts the model's reply short |
+| `/k ...` | Reads the cluster the way `kubectl` would and posts the answer in the room as `<k>`. Read-only: `get`, `describe`, `logs`, `top`, `events`, `api-resources`. Without `-n` it looks in every namespace. Examples: `/k get pods -n aviary-gitea`, `/k get deploy`, `/k logs gitea-0 --tail 20`, `/k top nodes`. `/k` alone shows its usage. It cannot read Secrets or change anything. |
 
 ### 5.2 "Away"
 

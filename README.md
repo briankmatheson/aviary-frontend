@@ -53,7 +53,11 @@ the gitea team `ADMIN_TEAM`, default `aviary:admins`): anyone else sees them gre
 The box beside the fortune is the **whiteboard**: a chat room over a canvas.
 Everyone on the page sees the same lines and the same drawing. The pencil
 button turns the pointer into a pen (strokes are coloured per person);
-`/erase` wipes the drawing, `/clear` the whole board. Both are kept in
+`/erase` wipes the drawing, `/clear` the whole board. `/k` is kubectl's reading
+half, for the room: `/k get pods -n aviary-gitea`, `/k logs POD`, `/k top nodes`
+(`/k` alone lists what it takes). It reads as the room's read-only account
+(no Secrets), looks in every namespace unless given `-n`, and cannot change
+anything. Both are kept in
 memory, like the lines.
 
 **Claude** is optional. With an Anthropic API key (`ANTHROPIC_API_KEY`, or one

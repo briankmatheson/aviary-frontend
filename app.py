@@ -161,6 +161,21 @@ EXPOSURES = (
 CHAT_URL = os.environ.get("CHAT_URL", "").rstrip("/")
 CHAT_MODEL = os.environ.get("CHAT_MODEL", "llama3")
 CHAT_ENABLED = bool(CHAT_URL)
+
+# Claude sits in the room too, when there is an Anthropic API key: reached over
+# the internet through the official SDK, so it needs no GPU here and answers
+# when the cluster's own model is away (or whenever it is called by name).
+# Inert without the SDK or without ANTHROPIC_API_KEY.
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-5-5")
+CLAUDE_NICK = os.environ.get("CLAUDE_NICK", "claude")
+CLAUDE_EFFORT = os.environ.get("CLAUDE_EFFORT", "medium")   # low | medium | high | xhigh | max
+CLAUDE_ENABLED = bool(anthropic and os.environ.get("ANTHROPIC_API_KEY"))
+# The room (the whiteboard) is there when anything can answer in it.
+ROOM_ENABLED = CHAT_ENABLED or CLAUDE_ENABLED
 CHAT_NICK = os.environ.get("CHAT_NICK", "")
 CHAT_STATE_CONFIGMAP = os.environ.get("CHAT_STATE_CONFIGMAP", "aviary-chat")
 # Ollama's own API (model list, pulls) lives beside its OpenAI-compatible one.
@@ -1276,7 +1291,15 @@ CHAT_CSS = """
  /* The fortune box's twin: same paper, same type, its rule on the right. */
  #chat { flex: 1 1 0; min-width: 280px; height: 270px; margin-top: 8px; display: flex; flex-direction: column;
    background: rgba(255,255,255,.85); border-right: 3px solid #4682b4; font: 13px/1.4 monospace; color: #333; }
- #chat .chat-log { flex: 1 1 auto; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
+ /* The whiteboard: the lines people say, over a canvas anyone can draw on. */
+ #chat .board { flex: 1 1 auto; min-height: 0; position: relative; display: flex; }
+ #chat .board canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+ #chat.drawing .board canvas { z-index: 2; pointer-events: auto; cursor: crosshair; touch-action: none; }
+ #chat.drawing .chat-log { opacity: .45; }
+ #chat .chat-log { flex: 1 1 auto; position: relative; z-index: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
+ #chat form button.pen { flex: 0 0 auto; margin-left: 10px; padding: 0 2px; border: 0; background: none; cursor: pointer;
+   font: inherit; color: #999; }
+ #chat form button.pen:hover, #chat.drawing form button.pen { color: #1a4d8f; }
  #chat .chat-log .hint { margin: auto; color: #999; font-style: italic; text-align: center; }
  #chat .msg { white-space: pre-wrap; overflow-wrap: anywhere; }
  #chat .msg .nick { color: #1a4d8f; }
@@ -1317,10 +1340,10 @@ CHAT_CSS = """
 """
 
 CHAT_HTML = """
-<section id="chat" class="__CLASS__" aria-label="Chat room" data-hint="__HINT__">
- <div class="chat-log" aria-live="polite"></div>
+<section id="chat" class="__CLASS__" aria-label="Whiteboard" data-hint="__HINT__" data-nick="__RAWNICK__" data-claude="__CLAUDE__" data-me="__ME__">
+ <div class="board"><canvas aria-hidden="true"></canvas><div class="chat-log" aria-live="polite"></div></div>
  <hr>
- <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off" maxlength="4000"><button type="button" class="model" title="choose or install a model">__NICK__ &#9662;</button></form>
+ <form><input type="text" placeholder="__PLACEHOLDER__" aria-label="Message" autocomplete="off" maxlength="4000"><button type="button" class="pen" title="draw on the whiteboard (click again to stop; /erase wipes the drawing)" aria-pressed="false">&#9998;</button><button type="button" class="model" title="choose or install a model"__NOMODEL__>__NICK__ &#9662;</button></form>
 </section>
 <dialog id="md">
  <h3>Model</h3>
@@ -1332,25 +1355,32 @@ CHAT_HTML = """
  <div class="md-foot"><button type="button" class="cancel">Close</button></div>
 </dialog>
 <script>
-// Chat room, IRC style. The transcript lives on the server and is the same for
-// everyone on the page: this polls /api/chat for lines that are new or have
-// changed since the revision it last saw (the model's reply grows in place),
-// and says things by POSTing them. /clear empties the room for everybody;
-// /stop (or Escape) cuts the model's reply short.
+// The whiteboard: a chat room, IRC style, over a canvas anyone can draw on.
+// The transcript and the drawing live on the server and are the same for
+// everyone on the page: this polls /api/chat for lines and strokes that are
+// new or have changed since the revision it last saw (a reply grows in place),
+// and says things by POSTing them. /clear empties the board for everybody,
+// /erase wipes only the drawing; /stop (or Escape) cuts a reply short.
 (function () {
   var box = document.getElementById('chat');
   if (!box || !window.fetch) return;
   var log = box.querySelector('.chat-log'), form = box.querySelector('form'), inp = form.querySelector('input');
   var rev = 0, epoch = '', rows = {}, busy = false, timer = null;
-  var pick = form.querySelector('button.model'), nick = pick.textContent.replace(/ *\u25be$/, '').replace(/ \\(away\\)$/, '');
-  var away = box.classList.contains('away');
-  // The model's presence, IRC style: with no GPU to run on it is away. The
-  // room stays open -- people can still talk to each other.
+  var pick = form.querySelector('button.model'), nick = box.dataset.nick;
+  var away = box.classList.contains('away'), claude = box.dataset.claude;
+  // Who is in the room, IRC style. The cluster's own model is away when there
+  // is no GPU for it to run on; Claude, when it is here, needs none. The room
+  // stays open either way -- people can still talk to each other.
   function presence() {
-    box.classList.toggle('away', away);
-    pick.textContent = nick + (away ? ' (away)' : '') + ' \u25be';
-    inp.placeholder = 'say something \u2014 ' + nick + (away ? ' is away' : ' is listening');
-    box.dataset.hint = away ? nick + ' is away: no GPU in the cluster.' : 'Running on the GPU in this cluster.';
+    var here = [];
+    if (nick && !away) here.push(nick);
+    if (claude) here.push(claude);
+    box.classList.toggle('away', !here.length);
+    if (nick) pick.textContent = nick + (away ? ' (away)' : '') + ' \u25be';
+    inp.placeholder = 'say something \u2014 ' + (here.length ? here.join(' and ') + (here.length > 1 ? ' are' : ' is') + ' listening'
+                                                              : nick + ' is away');
+    box.dataset.hint = (nick ? (away ? nick + ' is away: no GPU in the cluster.' : nick + ' runs on the GPU in this cluster.') : '')
+      + (claude ? (nick ? ' ' : '') + claude + ' is here.' : '');
     var h = log.querySelector('.hint'); if (h) h.textContent = box.dataset.hint;
   }
   function hint() {
@@ -1383,11 +1413,13 @@ CHAT_HTML = """
       .then(function (d) {
         // Only follow the bottom if the reader is already there.
         var stuck = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
-        if (d.epoch !== epoch) { epoch = d.epoch; rows = {}; log.textContent = ''; stuck = true; }
+        if (d.epoch !== epoch) { epoch = d.epoch; rows = {}; log.textContent = ''; stuck = true; wipe(0); }
         d.msgs.forEach(upsert);
+        if ((d.wiped || 0) > wiped) wipe(d.wiped);
+        (d.strokes || []).forEach(function (st) { strokes.push(st); ink(st); });
         rev = d.rev; busy = d.busy;
-        if (d.nick !== nick || !!d.away !== away) {   // someone switched the model, or it came or went
-          nick = d.nick; away = !!d.away; presence();
+        if (d.nick !== nick || !!d.away !== away || (d.claude || '') !== claude) {   // a model switched, came or went
+          nick = d.nick; away = !!d.away; claude = d.claude || ''; presence();
         }
         hint();
         if (stuck && d.msgs.length) log.scrollTop = log.scrollHeight;
@@ -1409,6 +1441,61 @@ CHAT_HTML = """
     inp.value = '';
     say(text);
   };
+
+  // Drawing. Strokes are lists of points in thousandths of the canvas, so they
+  // land in the same place whatever size each person's board is. The pen
+  // button puts the canvas on top of the text; off, clicks go to the text.
+  var board = box.querySelector('.board'), cv = board.querySelector('canvas'), ctx = cv.getContext('2d');
+  var pen = form.querySelector('button.pen'), strokes = [], wiped = 0, mine = null;
+  function hue(name) { var h = 0; for (var i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360; return h; }
+  function ink(st) {
+    var p = st.pts, w = cv.width, h = cv.height;
+    if (!p || p.length < 2) return;
+    ctx.strokeStyle = 'hsl(' + hue(st.nick || '') + ', 65%, 42%)';
+    ctx.lineWidth = Math.max(1.5, w / 400); ctx.lineCap = ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(p[0][0] * w / 1000, p[0][1] * h / 1000);
+    for (var i = 1; i < p.length; i++) ctx.lineTo(p[i][0] * w / 1000, p[i][1] * h / 1000);
+    ctx.stroke();
+  }
+  function fit() {
+    var r = board.getBoundingClientRect(), k = window.devicePixelRatio || 1;
+    cv.width = Math.max(1, Math.round(r.width * k)); cv.height = Math.max(1, Math.round(r.height * k));
+    strokes.forEach(ink);
+  }
+  function wipe(at) { strokes = []; wiped = at; ctx.clearRect(0, 0, cv.width, cv.height); }
+  function at(e) {
+    var r = cv.getBoundingClientRect();
+    return [Math.max(0, Math.min(1000, Math.round((e.clientX - r.left) * 1000 / r.width))),
+            Math.max(0, Math.min(1000, Math.round((e.clientY - r.top) * 1000 / r.height)))];
+  }
+  pen.onclick = function () {
+    var on = box.classList.toggle('drawing');
+    pen.setAttribute('aria-pressed', on ? 'true' : 'false');
+  };
+  cv.addEventListener('pointerdown', function (e) {
+    if (!box.classList.contains('drawing')) return;
+    cv.setPointerCapture(e.pointerId);
+    mine = { nick: box.dataset.me || '', pts: [at(e)] };
+  });
+  cv.addEventListener('pointermove', function (e) {
+    if (!mine || mine.pts.length >= 500) return;
+    var p = at(e), q = mine.pts[mine.pts.length - 1];
+    if (Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) < 3) return;
+    mine.pts.push(p);
+    ink({ nick: mine.nick, pts: [q, p] });
+  });
+  function lift() {
+    var st = mine; mine = null;
+    if (!st || st.pts.length < 2) return;
+    fetch('/api/board', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ pts: st.pts }) })
+      .then(function (r) { if (!r.ok) return r.text().then(function (t) { note(t.trim() || ('HTTP ' + r.status)); }); })
+      .catch(function () {}).then(tick);
+  }
+  cv.addEventListener('pointerup', lift);
+  cv.addEventListener('pointercancel', lift);
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(board);
+  fit();
   inp.onkeydown = function (e) { if (e.key === 'Escape' && busy) say('/stop'); };
   document.addEventListener('visibilitychange', function () { if (!document.hidden) tick(); });
   tick();
@@ -1416,7 +1503,7 @@ CHAT_HTML = """
   // The model menu: installed models (one click switches the room to it) and
   // a line to install another, with its progress.
   var dlg = document.getElementById('md');
-  if (!dlg || !dlg.showModal) { pick.hidden = true; return; }
+  if (!dlg || !dlg.showModal || !nick) { pick.hidden = true; return; }
   var list = dlg.querySelector('.md-list'), pform = dlg.querySelector('form'), pin = pform.querySelector('input');
   var pgo = pform.querySelector('button'), pmsg = dlg.querySelector('.md-pull'), ptimer = null;
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
@@ -2356,9 +2443,9 @@ def index():
         nodes=nodes_html,
         hosts=html.escape(hosts),
         me=html.escape(me),
-        rl_css=RL_CSS + IMG_CSS + SW_CSS + (CHAT_CSS if CHAT_ENABLED else ""),
+        rl_css=RL_CSS + IMG_CSS + SW_CSS + (CHAT_CSS if ROOM_ENABLED else ""),
         rl_html=RL_HTML + IMG_HTML,
-        chat=_chat_html(d.get("gpus", 0)) if CHAT_ENABLED else "",
+        chat=_chat_html(d.get("gpus", 0)) if ROOM_ENABLED else "",
         splash_css=SPLASH_CSS,
         splash_html=SPLASH_HTML,
     )
@@ -2945,17 +3032,139 @@ def _chat_relay(messages, upstream):
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
 
 
+# The same two lookups the cluster's model has, in the Messages API's shape.
+# Inputs stream as they are generated (eager_input_streaming), so they are
+# checked here before a tool runs: see _claude_relay.
+CLAUDE_TOOLS = [
+    {"name": t["function"]["name"], "description": t["function"]["description"],
+     "input_schema": t["function"]["parameters"], "eager_input_streaming": True}
+    for t in CHAT_TOOLS
+]
+_claude = {"client": None}
+
+
+def _claude_client():
+    if _claude["client"] is None:
+        _claude["client"] = anthropic.Anthropic()   # ANTHROPIC_API_KEY from the environment
+    return _claude["client"]
+
+
+def _claude_messages(msgs):
+    """The room as a Messages API conversation, from Claude's seat: its own
+    earlier lines are the assistant's, everything else (people, and the other
+    model) is said to it with the speaker's nick in front. Consecutive lines
+    from the same side are one message; it starts with something said to it."""
+    out = []
+    for m in msgs:
+        role = "assistant" if m["bot"] and m["nick"] == CLAUDE_NICK else "user"
+        text = m["text"] if role == "assistant" else f"<{m['nick']}> {m['text']}"
+        if out and out[-1]["role"] == role:
+            out[-1]["content"] += "\n" + text
+        elif out or role == "user":
+            out.append({"role": role, "content": text})
+    return out
+
+
+def _claude_relay(messages):
+    """Claude's reply as plain text, streamed, running the lookups it asks for
+    along the way -- the counterpart of _chat_relay. Each round is one streamed
+    Messages request; if it ends in tool calls they are run, the results
+    appended, and it goes again. A line per lookup is written into the reply."""
+    api, system, bad_json = _claude_client(), _chat_system(nick=CLAUDE_NICK, claude=True), 0
+    for _ in range(CHAT_TOOL_ROUNDS + 1):
+        said = ""
+        try:
+            with api.beta.messages.stream(
+                model=CLAUDE_MODEL,
+                max_tokens=16000,
+                system=system,
+                tools=CLAUDE_TOOLS,
+                messages=messages,
+                output_config={"effort": CLAUDE_EFFORT},
+                cache_control={"type": "ephemeral"},
+                # A request the model's safety classifiers decline is re-run on
+                # the fallback model inside the same call.
+                betas=["server-side-fallback-2026-07-01"],
+                fallbacks="default",
+            ) as stream:
+                for event in stream:
+                    if event.type == "text":
+                        said += event.text
+                        yield event.text.encode()
+                reply = stream.get_final_message()
+            bad_json = 0
+        except ValueError:
+            # A tool input the SDK could not parse at all: ask for the turn again.
+            bad_json += 1
+            if bad_json > 2:
+                yield b"\n(stopped: a lookup came out garbled)\n"
+                return
+            continue
+        except anthropic.AuthenticationError:
+            yield b"(Claude is not reachable: the API key was not accepted)"
+            return
+        except anthropic.RateLimitError:
+            yield b"\n(Claude is rate limited just now: try again in a moment)"
+            return
+        except anthropic.APIStatusError as e:
+            yield f"\n(Claude's API answered {e.status_code}: {e.message})".encode()
+            return
+        except anthropic.APIConnectionError:
+            yield b"\n(Claude is not reachable from the cluster just now)"
+            return
+        if reply.stop_reason == "pause_turn":
+            messages.append({"role": "assistant", "content": reply.content})
+            continue
+        if reply.stop_reason == "refusal":
+            yield b"\n(Claude declined to answer that)"
+            return
+        calls = [b for b in reply.content if b.type == "tool_use"]
+        if not calls:
+            return
+        if reply.stop_reason == "max_tokens":
+            yield b"\n(stopped: the reply ran out of room mid-lookup)"
+            return
+        # The whole content goes back, thinking blocks included, unchanged.
+        messages.append({"role": "assistant", "content": reply.content})
+        if said.strip() and not said.endswith("\n"):
+            yield b"\n"
+        results = []
+        for call in calls:
+            args = call.input
+            want = "path" if call.name == "kubernetes_get" else "url" if call.name == "http_get" else None
+            if not isinstance(args, dict) or not want or not isinstance(args.get(want), str) or not args[want]:
+                results.append({"type": "tool_result", "tool_use_id": call.id, "is_error": True,
+                                "content": json.dumps({"INVALID_JSON": json.dumps(args, default=str)})})
+                continue
+            note, result = _chat_tool(call.name, args)
+            yield f"\u00b7 {note}\n".encode()
+            results.append({"type": "tool_result", "tool_use_id": call.id, "content": result})
+        messages.append({"role": "user", "content": results})
+    yield b"\n(stopped: too many lookups for one reply)"
+
+
 def _chat_html(gpus):
-    """The chat window. The room is always open; with no GPU in the cluster
-    for the model to run on, the model is marked away, IRC style."""
-    on = gpus > 0
-    model, nick = html.escape(chat_model()), html.escape(chat_nick())
+    """The whiteboard. The room is always open; with no GPU in the cluster for
+    the cluster's own model to run on, that model is marked away, IRC style.
+    Claude, when it is configured, is simply there."""
+    on = CHAT_ENABLED and gpus > 0
+    model = html.escape(chat_model()) if CHAT_ENABLED else ""
+    nick = html.escape(chat_nick()) if CHAT_ENABLED else ""
+    claude = html.escape(CLAUDE_NICK) if CLAUDE_ENABLED else ""
+    here = [n for n in (nick if on else "", claude) if n]
+    hint = ((f"{nick} runs on the GPU in this cluster." if on else f"{nick} is away: no GPU in the cluster.") if nick else "") \
+        + ((" " if nick else "") + f"{claude} is here." if claude else "")
+    listening = (" and ".join(here) + (" are" if len(here) > 1 else " is") + " listening") if here else f"{nick} is away"
     page = CHAT_HTML
     for key, val in (
-        ("__CLASS__", "" if on else "away"),
-        ("__HINT__", "Running on the GPU in this cluster." if on else f"{nick} is away: no GPU in the cluster."),
+        ("__CLASS__", "" if here else "away"),
+        ("__HINT__", hint),
+        ("__RAWNICK__", nick),
+        ("__CLAUDE__", claude),
+        ("__ME__", html.escape(_chat_nick())),
+        ("__NOMODEL__", "" if CHAT_ENABLED else " hidden"),
         ("__NICK__", nick if on else f"{nick} (away)"),
-        ("__PLACEHOLDER__", f"say something &mdash; {nick} is {'listening' if on else 'away'}"),
+        ("__PLACEHOLDER__", f"say something &mdash; {listening}"),
         ("__MODEL__", model),
     ):
         page = page.replace(key, val)
@@ -2983,7 +3192,7 @@ def _chat_briefing():
     return _briefing["text"]
 
 
-def _chat_system():
+def _chat_system(nick=None, claude=False):
     """The system prompt: who the model is here, and what this cluster serves
     (from the same snapshot the menu is drawn from), so it can point at things."""
     lines = []
@@ -2995,17 +3204,25 @@ def _chat_system():
         pass  # no cluster view: it can still chat
     where = f" for the cluster at {BASE_DOMAIN}" if BASE_DOMAIN else ""
     apps = ("\nWhat the cluster serves:\n" + "\n".join(lines)) if lines else ""
+    # With two assistants in the room, each is told about the other.
+    both = CHAT_ENABLED and CLAUDE_ENABLED
+    other = (chat_nick() if claude else CLAUDE_NICK) if both else ""
+    others = (f"Another assistant, {other}, is in the room too: its lines also reach you as <{other}> ..., "
+              "and people may be talking to it rather than to you. ") if other else ""
     briefing = _chat_briefing()
     if briefing:
         apps += ("\n\nWhat you know about this place (background from its admins: use it to answer, "
                  "and prefer a live lookup where the two could differ):\n" + briefing)
     return (
-        f"You are {chat_nick()}, the assistant in the chat room on Aviary, the landing page{where}. "
+        f"You are {nick or chat_nick()}, {'an' if both else 'the'} assistant in the chat room (the whiteboard) on Aviary, "
+        f"the landing page{where}. " + others +
         "The room is shared, IRC style: everyone on the page sees it, and what people say "
         "reaches you as lines of the form <nick> message. Several people may be talking; "
         "answer the latest line, addressing people by nick when it helps. Write your reply "
         "as plain text with no <nick> prefix of your own. "
-        "You run on the cluster's own GPU. Be brief and direct. You can look things up: "
+        + ("You are Claude, made by Anthropic, reached over Anthropic's API: you do not run in this cluster. "
+           if claude else "You run on the cluster's own GPU. ")
+        + "Be brief and direct. You can look things up: "
         "kubernetes_get reads this cluster's live state (read-only, no Secrets) and http_get "
         f"fetches pages from this cluster's own network only ({_CHAT_NETS_TEXT}: the apps "
         "listed below); you have no internet access. Use them rather than guess, and say what "
@@ -3034,7 +3251,10 @@ def _chat_error(status, message):
 # tells a page to drop what it is showing. In memory only -- which is why the
 # image runs a single gunicorn worker (threads, not processes).
 _room = {"epoch": secrets.token_hex(4), "rev": 0, "next": 1, "msgs": [], "busy": False, "stop": False,
-         "told": False}   # told: the room has been told the model is away
+         "told": False,   # told: the room has been told the model is away
+         "strokes": [], "wiped": 0}   # the drawing, and the revision it was last wiped at
+BOARD_STROKES_KEEP = 1500   # strokes the board remembers (in memory, like the lines)
+BOARD_STROKE_POINTS = 500   # points in one stroke
 _roomlock = threading.Lock()
 
 
@@ -3042,13 +3262,27 @@ def _chat_away(fresh=False):
     """The model is away when the cluster has no GPU for it to run on. Read
     from the page's snapshot as it stands (the poll must not wait on a refresh)
     unless `fresh`."""
-    return not ((snapshot() if fresh else _cache.get("data")) or {}).get("gpus")
+    return not CHAT_ENABLED or not ((snapshot() if fresh else _cache.get("data")) or {}).get("gpus")
+
+
+def _room_responder(text, away):
+    """Who answers a line: "claude", "model" (the cluster's own) or None. A
+    line that names one of them is for that one; otherwise the cluster's model
+    answers when it is here, and Claude when it is not."""
+    said = lambda nick: re.search(rf"(?<![\w-]){re.escape(nick)}(?![\w-])", text, re.I)
+    if CLAUDE_ENABLED and said(CLAUDE_NICK):
+        return "claude"
+    if CHAT_ENABLED and not away:
+        return "model"
+    return "claude" if CLAUDE_ENABLED else None
 
 
 def _room_presence(away, spoke=False):
     """The model's comings and goings, as IRC has them (caller holds
     _roomlock): the first line said to an away model gets one away notice, not
     one per line, and the model says so when it is back."""
+    if not CHAT_ENABLED:
+        return
     if away and spoke and not _room["told"]:
         _room["told"] = True
         _room_say("*", f"{chat_nick()} is away: no GPU in the cluster", bot=True)
@@ -3076,19 +3310,29 @@ def _room_reply():
         while True:
             with _roomlock:
                 msgs = _room["msgs"]
-                if not msgs or msgs[-1]["bot"]:   # (a notice counts as not-a-person)
+                # The newest line that is not a notice ("* qwen is away" may
+                # have landed after the line it was about).
+                last = next((m for m in reversed(msgs) if m["nick"] != "*"), None)
+                if not last or last["bot"]:
                     return
+                who = _room_responder(last["text"], _chat_away())
+                if not who:
+                    return
+                said = [m for m in msgs[-CHAT_MAX_MESSAGES:] if m["text"] and m["nick"] != "*"]
+                me = CLAUDE_NICK if who == "claude" else chat_nick()
                 history = [
-                    {"role": "assistant", "content": m["text"]} if m["bot"]
+                    {"role": "assistant", "content": m["text"]} if m["bot"] and m["nick"] == me
                     else {"role": "user", "content": f"<{m['nick']}> {m['text']}"}
-                    for m in msgs[-CHAT_MAX_MESSAGES:] if m["text"] and m["nick"] != "*"
+                    for m in said
                 ]
                 epoch = _room["epoch"]
                 _room["stop"] = False
-                mine = _room_say(chat_nick(), "", bot=True, done=False)
+                mine = _room_say(me, "", bot=True, done=False)
             messages = [{"role": "system", "content": _chat_system()}] + history
             try:
-                for piece in _chat_relay(messages, _chat_open(messages)):
+                pieces = _claude_relay(_claude_messages(said)) if who == "claude" \
+                    else _chat_relay(messages, _chat_open(messages))
+                for piece in pieces:
                     with _roomlock:
                         if _room["epoch"] != epoch:
                             return  # the room was cleared under us
@@ -3101,7 +3345,7 @@ def _room_reply():
             except urllib.error.HTTPError as e:
                 mine["text"] += f"(the model refused the request: {e.code} {e.read(200).decode('utf-8', 'replace')})"
             except Exception as e:
-                mine["text"] += f"(the model is not reachable: {e})"
+                mine["text"] += f"({me} is not reachable: {e})"
             with _roomlock:
                 mine["text"] = mine["text"].strip() or "(no reply)"
                 mine["done"] = True
@@ -3122,7 +3366,7 @@ def api_chat_poll():
     """The room since revision `after`: every line that is new or has changed.
     A page holding another epoch (the room was cleared, or the app restarted)
     gets the whole room."""
-    if not CHAT_ENABLED:
+    if not ROOM_ENABLED:
         return _chat_error(404, "chat is not configured\n")
     try:
         after = int(request.query.get("after", "0"))
@@ -3135,7 +3379,10 @@ def api_chat_poll():
             after = 0
         out = {
             "epoch": _room["epoch"], "rev": _room["rev"], "busy": _room["busy"],
-            "nick": chat_nick(), "away": away,
+            "nick": chat_nick() if CHAT_ENABLED else "", "away": away,
+            "claude": CLAUDE_NICK if CLAUDE_ENABLED else "",
+            "wiped": _room["wiped"],
+            "strokes": [{k: st[k] for k in ("id", "nick", "pts")} for st in _room["strokes"] if st["rev"] > after],
             "msgs": [{k: m[k] for k in ("id", "nick", "text", "bot", "done")}
                      for m in _room["msgs"] if m["rev"] > after],
         }
@@ -3198,9 +3445,10 @@ def api_chat_pull():
 @app.route("/api/chat", method="POST")
 def api_chat():
     """Say something in the room. It shows for everyone under the speaker's
-    name, and the model answers (unless it is away: no GPU). /clear empties the room; /stop cuts the
+    name, and whoever it is for answers (see _room_responder). /erase wipes
+    the drawing and leaves the lines. /clear empties the room; /stop cuts the
     model's current reply short. Errors are plain text for the page to show."""
-    if not CHAT_ENABLED:
+    if not ROOM_ENABLED:
         return _chat_error(404, "chat is not configured\n")
     try:
         text = (request.json or {}).get("text")
@@ -3215,18 +3463,48 @@ def api_chat():
         return "ok\n"
     if text == "/clear":
         with _roomlock:
-            _room.update(epoch=secrets.token_hex(4), msgs=[], stop=True, told=False)
+            _room.update(epoch=secrets.token_hex(4), msgs=[], stop=True, told=False, strokes=[])
             _room["rev"] += 1
+        return "ok\n"
+    if text == "/erase":
+        with _roomlock:
+            _room["strokes"] = []
+            _room_say("*", f"{_chat_nick()} wiped the drawing", bot=True)
+            _room["wiped"] = _room["rev"]
         return "ok\n"
     away = _chat_away(fresh=True)
     with _roomlock:
         _room_presence(away)
         _room_say(_chat_nick(), text)
         _room_presence(away, spoke=True)
-        start = not away and not _room["busy"]
+        start = _room_responder(text, away) is not None and not _room["busy"]
         _room["busy"] = _room["busy"] or start
     if start:
         threading.Thread(target=_room_reply, daemon=True).start()
+    return "ok\n"
+
+
+@app.route("/api/board", method="POST")
+def api_board():
+    """Add one stroke to the whiteboard's drawing: a list of [x, y] points in
+    thousandths of the board. Everyone on the page gets it with their next
+    poll, under the drawer's name (which picks its colour)."""
+    if not ROOM_ENABLED:
+        return _chat_error(404, "chat is not configured\n")
+    try:
+        pts = (request.json or {}).get("pts")
+    except Exception:
+        pts = None
+    ok = isinstance(pts, list) and 2 <= len(pts) <= BOARD_STROKE_POINTS and all(
+        isinstance(p, list) and len(p) == 2 and all(isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 1000 for v in p)
+        for p in pts)
+    if not ok:
+        return _chat_error(400, f'need {{"pts": [[x, y], ...]}}: 2 to {BOARD_STROKE_POINTS} points, each 0..1000\n')
+    with _roomlock:
+        _room["rev"] += 1
+        _room["strokes"].append({"id": _room["next"], "nick": _chat_nick(), "pts": pts, "rev": _room["rev"]})
+        _room["next"] += 1
+        del _room["strokes"][:-BOARD_STROKES_KEEP]
     return "ok\n"
 
 

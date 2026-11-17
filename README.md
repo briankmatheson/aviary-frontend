@@ -28,6 +28,12 @@ The rows of each list can be dragged into another order. The order is each
 person's own, kept per gitea login in the `aviary-menu-order` ConfigMap
 (`MENU_ORDER_CONFIGMAP`), so it follows them to any browser.
 
+A tile covers its own namespace and any namespace labelled
+`aviary/app=<tile name>` (`kubectl label namespace builds aviary/app=drone`):
+its figures are summed over them, and its scale popup and restart button
+reach all of them. Stop/start and the default requests and limits stay with
+the tile's own namespace.
+
 Every row has a **scale** button (`!` while containers lack requests or
 limits, an arrow otherwise): the namespace's default requests and limits, and
 the number of pods of each Deployment and StatefulSet (0 to `SCALE_MAX`,

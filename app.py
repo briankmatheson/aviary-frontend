@@ -803,6 +803,8 @@ def app_resources(ns):
 
       usage      the app's busiest container right now (the values are per
                  container, so that is the one a limit has to clear)
+      peak       the most any one of its containers has used: the high-water
+                 mark a limit should clear (never below usage)
       top        the scale's maximum: the largest node, since no container can
                  be given more
       floor      the lowest limit that keeps every pod admissible: a container
@@ -815,22 +817,25 @@ def app_resources(ns):
     """
     v1 = client.CoreV1Api()
     unit = {"cpu": 1e-3, "memory": 2**20}
+    nss = tile_namespaces(ns)
     usage = {"cpu": 0.0, "memory": 0.0}
     try:
-        for p in client.CustomObjectsApi().list_namespaced_custom_object(
-            "metrics.k8s.io", "v1beta1", ns, "pods"
-        ).get("items", []):
-            for c in p.get("containers", []):
-                for res in usage:
-                    usage[res] = max(usage[res], _q(c["usage"][res]))
+        for x in nss:
+            for p in client.CustomObjectsApi().list_namespaced_custom_object(
+                "metrics.k8s.io", "v1beta1", x, "pods"
+            ).get("items", []):
+                for c in p.get("containers", []):
+                    for res in usage:
+                        usage[res] = max(usage[res], _q(c["usage"][res]))
     except Exception:
         pass  # metrics-server optional: the fill just stays empty
+    peak = container_peaks(nss, usage)
     top = {"cpu": 0.0, "memory": 0.0}
     for n in v1.list_node().items:
         for res in top:
             top[res] = max(top[res], _q(n.status.capacity[res]))
     floor = {"cpu": 0.0, "memory": 0.0}
-    for p in v1.list_namespaced_pod(ns).items:
+    for p in v1.list_namespaced_pod(ns).items:   # the LimitRange is this namespace's alone
         for c in p.spec.containers + (p.spec.init_containers or []):
             req = (c.resources.requests if c.resources else None) or {}
             lim = (c.resources.limits if c.resources else None) or {}
@@ -848,15 +853,19 @@ def app_resources(ns):
             l = min(_q(lim[res]) if res in lim else max(2 * r, floor[res]), top[res])
         out[key] = {
             "usage": usage[res] / unit[res],
+            "peak": peak[res] / unit[res],
             "top": top[res] / unit[res],
             "floor": floor[res] / unit[res],
             "request": (min(r, l) if l else min(r, top[res])) / unit[res],
             "limit": l / unit[res],
         }
-    try:
-        out["workloads"] = app_workloads(ns)
-    except client.exceptions.ApiException:
-        out["workloads"] = []
+    out["workloads"] = []
+    for x in nss:
+        try:
+            out["workloads"] += app_workloads(x)
+        except client.exceptions.ApiException:
+            pass
+    out["namespaces"] = nss
     out["scale_max"] = SCALE_MAX
     return out
 
@@ -875,27 +884,27 @@ def app_workloads(ns):
         for w in lister(ns).items:
             if ns == self_namespace() and w.metadata.name == "aviary-frontend":
                 continue
-            out.append({"kind": kind, "name": w.metadata.name, "replicas": w.spec.replicas or 0,
+            out.append({"kind": kind, "ns": ns, "name": w.metadata.name, "replicas": w.spec.replicas or 0,
                         "ready": w.status.ready_replicas or 0})
     return sorted(out, key=lambda w: (w["name"], w["kind"]))
 
 
 def scale_workloads(ns, wanted):
     """Set the number of pods on some of an app's workloads: wanted is
-    {(kind, name): replicas}. Only what differs is touched. Returns how many
-    were changed. (For a helm-installed app the next helm upgrade puts the
-    chart's number back.)"""
+    {(kind, namespace, name): replicas}, the namespace being one of the
+    tile's. Only what differs is touched. Returns how many were changed. (For
+    a helm-installed app the next helm upgrade puts the chart's number back.)"""
     apps = client.AppsV1Api()
     patch = {"deployment": apps.patch_namespaced_deployment_scale, "statefulset": apps.patch_namespaced_stateful_set_scale}
-    now = {(w["kind"], w["name"]): w["replicas"] for w in app_workloads(ns)}
+    now = {(w["kind"], w["ns"], w["name"]): w["replicas"] for x in tile_namespaces(ns) for w in app_workloads(x)}
     changed = 0
     for key, n in wanted.items():
         if key not in now:
-            raise ValueError(f"no {key[0]} {key[1]} here")
+            raise ValueError(f"no {key[0]} {key[2]} in {key[1]}")
         if not 0 <= n <= SCALE_MAX:
-            raise ValueError(f"{key[1]}: pods must be between 0 and {SCALE_MAX}")
+            raise ValueError(f"{key[2]}: pods must be between 0 and {SCALE_MAX}")
         if n != now[key]:
-            patch[key[0]](key[1], ns, {"spec": {"replicas": n}})
+            patch[key[0]](key[2], key[1], {"spec": {"replicas": n}})
             changed += 1
     return changed
 
@@ -985,6 +994,25 @@ def _prom(expr, by="nodename"):
 PEAK_WINDOW = os.environ.get("PEAK_WINDOW", "7d")
 _peak = {"at": 0.0, "cpu": {}, "mem": {}}
 _peaklock = threading.Lock()
+
+
+def container_peaks(namespaces, now):
+    """{"cpu": cores, "memory": bytes}: the most any single container in these
+    namespaces has used over PEAK_WINDOW (Prometheus), and never less than
+    `now`, the busiest container at the moment. Asked when a scale popup opens."""
+    out = dict(now)
+    if PROMETHEUS_URL and namespaces:
+        # Namespace names are DNS labels (letters, digits, hyphens): nothing to escape.
+        names = [n for n in namespaces if re.fullmatch(r"[a-z0-9-]+", n)]
+        sel = 'container!="",container!="POD",namespace=~"%s"' % "|".join(names)
+        asked = (
+            ("cpu", f"max(max_over_time((rate(container_cpu_usage_seconds_total{{{sel}}}[5m]))[{PEAK_WINDOW}:5m]))"),
+            ("memory", f"max(max_over_time(container_memory_working_set_bytes{{{sel}}}[{PEAK_WINDOW}]))"),
+        )
+        for res, expr in asked:
+            for v in _prom(expr, by="").values():
+                out[res] = max(out[res], v)
+    return out
 
 
 def app_peaks(cpu, mem):
@@ -1264,9 +1292,37 @@ SNAPSHOT_WAIT = 2.5     # after something was changed, how long a page waits for
 _building = threading.Lock()   # one rebuild at a time; _lock only guards _cache itself
 
 
+# A tile covers its own namespace (the one its route's Service is in) and any
+# namespace labelled aviary/app=<the tile's name>: Drone's builds, say, kept in
+# a namespace apart from the server. Its figures are summed over all of them,
+# and its scale popup and restart reach all of them.
+APP_LABEL = "aviary/app"
+
+
+def app_groups():
+    """{tile name: [namespace, ...]} from the aviary/app label on namespaces."""
+    out = {}
+    try:
+        for n in client.CoreV1Api().list_namespace(label_selector=APP_LABEL).items:
+            out.setdefault((n.metadata.labels or {}).get(APP_LABEL, ""), []).append(n.metadata.name)
+    except Exception:
+        pass  # no labels read: every tile is just its own namespace
+    out.pop("", None)
+    return {k: sorted(v) for k, v in out.items()}
+
+
+def tile_namespaces(ns, label=None, d=None):
+    """Every namespace of the tile whose own namespace is ns, that one first."""
+    d = d or snapshot()
+    if label is None:
+        label = next((r[0].split(".", 1)[0] for r in list(d["routes"]) + list(d.get("l4", [])) if r[1] == ns), "")
+    return [ns] + [x for x in d.get("groups", {}).get(label, []) if x != ns]
+
+
 def _snapshot_build():
     gws = gateways()
     return {
+        "groups": app_groups(),
         "gateways": gws,
         "routes": routes(gws),
         "l4": l4_routes(gws),
@@ -1369,6 +1425,10 @@ RL_CSS = """
  #rl .rl-track { position: absolute; left: 0; right: 0; top: 11px; height: 12px; border-radius: 6px;
    background: #e6e9ee; overflow: hidden; }
  #rl .rl-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; }
+ /* The high-water mark: a line across the track at the most a container has used. */
+ #rl .rl-peak { position: absolute; top: 50%; width: 2px; height: 22px; margin: -11px 0 0 -1px; background: #b00020;
+   border-radius: 1px; pointer-events: none; z-index: 1; }
+ #rl .rl-peak[hidden] { display: none; }
  #rl .rl-band { position: absolute; top: 9px; height: 16px; border: 2px solid #1a4d8f; border-radius: 8px;
    box-sizing: border-box; pointer-events: none; }
  #rl .rl-slider input[type=range] { position: absolute; left: 0; top: 0; width: 100%; height: 34px; margin: 0;
@@ -1696,17 +1756,18 @@ RL_HTML = """
 <dialog id="rl"><form method="post">
  <h3>Scale: <span id="rl-app"></span></h3>
  <p class="note">Requests and limits are defaults for each container in this app that sets none
- of its own (a namespace LimitRange); the bar is filled to the app's busiest container. Slide a limit
+ of its own (a namespace LimitRange); the bar is filled to the app's busiest container, and the red
+ line is the high-water mark: the most one container has used. Slide a limit
  all the way down for no limit. Pods are
  set per workload: one that keeps its data on a volume of its own usually cannot run more than one.</p>
  <div class="rl-row" data-res="cpu"><div class="rl-head"><b>CPU</b><span class="now"></span></div>
-  <div class="rl-slider"><div class="rl-track"><div class="rl-fill"></div></div><div class="rl-band"></div>
+  <div class="rl-slider"><div class="rl-track"><div class="rl-fill"></div></div><div class="rl-band"></div><div class="rl-peak"></div>
    <input type="range" class="lo" min="0" max="1000" step="1" aria-label="CPU request">
    <input type="range" class="hi" min="0" max="1000" step="1" aria-label="CPU limit"></div>
   <div class="rl-vals"><span>request <b class="req"></b></span><span>limit <b class="lim"></b></span></div>
   <input type="hidden" name="cpu_request"><input type="hidden" name="cpu_limit"></div>
  <div class="rl-row" data-res="mem"><div class="rl-head"><b>Memory</b><span class="now"></span></div>
-  <div class="rl-slider"><div class="rl-track"><div class="rl-fill"></div></div><div class="rl-band"></div>
+  <div class="rl-slider"><div class="rl-track"><div class="rl-fill"></div></div><div class="rl-band"></div><div class="rl-peak"></div>
    <input type="range" class="lo" min="0" max="1000" step="1" aria-label="Memory request">
    <input type="range" class="hi" min="0" max="1000" step="1" aria-label="Memory limit"></div>
   <div class="rl-vals"><span>request <b class="req"></b></span><span>limit <b class="lim"></b></span></div>
@@ -1767,7 +1828,11 @@ RL_HTML = """
     }
     lo.value = pos(d.request); hi.value = d.limit > 0 ? pos(d.limit) : 0;
     lo.oninput = function () { draw(lo); }; hi.oninput = function () { draw(hi); };
-    row.querySelector('.now').textContent = 'busiest container now: ' + fmt(res, d.usage);
+    var mark = row.querySelector('.rl-peak'), peak = Math.max(d.peak || 0, d.usage || 0);
+    mark.hidden = !(peak > 0);
+    mark.style.left = pos(peak) / 10 + '%';
+    mark.title = 'high-water mark: the most one container has used, ' + fmt(res, peak);
+    row.querySelector('.now').textContent = 'busiest container now: ' + fmt(res, d.usage) + (peak > 0 ? ' \u00b7 high-water mark: ' + fmt(res, peak) : '');
     draw();
   }
   document.addEventListener('click', function (e) {
@@ -1785,9 +1850,10 @@ RL_HTML = """
         (d.workloads || []).forEach(function (w) {
           var line = document.createElement('label'), name = document.createElement('code'), was = document.createElement('small');
           var n = document.createElement('input');
-          name.textContent = w.name; was.textContent = w.kind + ', ' + w.ready + ' of ' + w.replicas + ' ready';
+          name.textContent = w.name;
+          was.textContent = (w.ns !== b.dataset.ns ? w.ns + ', ' : '') + w.kind + ', ' + w.ready + ' of ' + w.replicas + ' ready';
           n.type = 'number'; n.min = 0; n.max = d.scale_max; n.step = 1; n.required = true; n.value = w.replicas;
-          n.name = 'scale.' + w.kind + '.' + w.name; n.setAttribute('aria-label', 'pods for ' + w.name);
+          n.name = 'scale.' + w.kind + '.' + w.ns + '.' + w.name; n.setAttribute('aria-label', 'pods for ' + w.name);
           line.appendChild(name); line.appendChild(was); line.appendChild(n); list.appendChild(line);
         });
         dlg.querySelector('.rl-pods').hidden = !(d.workloads || []).length;
@@ -2458,18 +2524,28 @@ def index():
         me_too = svc == "aviary-frontend"  # that's us: listed first under System
         label = host.split(".", 1)[0]
         blurb = "This page" if me_too else BLURBS.get(label, f"{ns}/{svc}:{port}")
-        mem = _hbytes(m["mem"][ns]) if ns in m["mem"] else "-"
-        cpu = _hcpu(m["cpu"][ns]) if ns in m["cpu"] else "-"
-        disk = _hbytes(m["disk"][ns]) if ns in m["disk"] else "-"
-        mem_top, cpu_top = m["mem_max"].get(ns), m["cpu_max"].get(ns)
-        mem_heat = _heat(_frac(m["mem"].get(ns), mem_top), f"limit {_hbytes(mem_top)}" if mem_top else "")
-        cpu_heat = _heat(_frac(m["cpu"].get(ns), cpu_top), f"limit {_hcpu(cpu_top)}" if cpu_top else "")
+        # Figures are summed over the tile's namespaces (its own, and any
+        # labelled for it). A sum of high-water marks is at most a little over
+        # the true peak of the sum: the namespaces rarely peak together.
+        nss = tile_namespaces(ns, label, d)
+        total = lambda key: sum(m.get(key, {}).get(x, 0) for x in nss) if any(x in m.get(key, {}) for x in nss) else None
+        mem_now, cpu_now, disk_now = total("mem"), total("cpu"), total("disk")
+        mem = _hbytes(mem_now) if mem_now is not None else "-"
+        cpu = _hcpu(cpu_now) if cpu_now is not None else "-"
+        disk = _hbytes(disk_now) if disk_now is not None else "-"
+        mem_top, cpu_top = total("mem_max"), total("cpu_max")
+        also = f" &#10;with {', '.join(nss[1:])}" if len(nss) > 1 else ""
+        mem_heat = _heat(_frac(mem_now, mem_top), f"limit {_hbytes(mem_top)}" if mem_top else "")
+        cpu_heat = _heat(_frac(cpu_now, cpu_top), f"limit {_hcpu(cpu_top)}" if cpu_top else "")
         # now / high-water mark: the most the app has been seen to use.
-        mem_hi, cpu_hi = m.get("mem_peak", {}).get(ns), m.get("cpu_peak", {}).get(ns)
-        hi = '<i title="the most it has used (high-water mark)"> / {}</i>'
-        mem_hi = hi.format(_hbytes(mem_hi)) if mem_hi and ns in m["mem"] else ""
-        cpu_hi = hi.format(_hcpu(cpu_hi)) if cpu_hi and ns in m["cpu"] else ""
-        gaps = m["unset"].get(ns)
+        mem_hi, cpu_hi = total("mem_peak"), total("cpu_peak")
+        hi = '<i title="the most it has used (high-water mark)' + also + '"> / {}</i>'
+        mem_hi = hi.format(_hbytes(mem_hi)) if mem_hi and mem_now is not None else ""
+        cpu_hi = hi.format(_hcpu(cpu_hi)) if cpu_hi and cpu_now is not None else ""
+        gaps = {}
+        for x in nss:
+            for k, n in (m["unset"].get(x) or {}).items():
+                gaps[k] = gaps.get(k, 0) + n
         warn = ""
         if gaps:
             tip = "containers without: " + ", ".join(f"{k} ({n})" for k, n in sorted(gaps.items()))
@@ -3739,13 +3815,13 @@ def app_resources_set(ns):
             "defaultRequest": {"cpu": f"{val['cpu_request']}m", "memory": f"{val['mem_request']}Mi"},
         }, **({"default": limits} if limits else {}))]},
     }
-    # Pods: fields named scale.<kind>.<name>, one per workload in the popup.
+    # Pods: fields named scale.<kind>.<namespace>.<name>, one per workload in the popup.
     wanted = {}
     for field in request.forms:
         if field.startswith("scale."):
-            _, kind, name = (field.split(".", 2) + ["", ""])[:3]
+            _, kind, wns, name = (field.split(".", 3) + ["", "", ""])[:4]
             try:
-                wanted[(kind, name)] = int(request.forms.get(field, ""))
+                wanted[(kind, wns, name)] = int(request.forms.get(field, ""))
             except ValueError:
                 raise HTTPError(400, f"{name}: pods must be a whole number\n")
     v1 = client.CoreV1Api()
@@ -3833,10 +3909,12 @@ def node_delete(name):
 
 @app.route("/app/<ns>/restart", method="POST")
 def app_restart(ns):
-    """Restart an app: roll every workload in its namespace."""
+    """Restart an app: roll every workload in its namespaces (its own, and any
+    labelled for it)."""
     if ns not in app_namespaces():
         raise HTTPError(404, "no such app\n")
-    restart_workloads(ns)
+    for x in tile_namespaces(ns):
+        restart_workloads(x)
     _bump()
     redirect("/")
 

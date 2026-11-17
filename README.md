@@ -50,7 +50,10 @@ button turns the pointer into a pen (strokes are coloured per person);
 `/erase` wipes the drawing, `/clear` the whole board. Both are kept in
 memory, like the lines.
 
-**Claude** is optional. With `ANTHROPIC_API_KEY` set it is one more entry in
+**Claude** is optional. With an Anthropic API key (`ANTHROPIC_API_KEY`, or one
+an admin enters in the box at the foot of the model menu: it is tried against
+Anthropic's API, kept in the Secret `aviary-claude` (`CLAUDE_SECRET`) and
+never shown again) it is one more entry in
 the room's model menu (`claude`; `CLAUDE_MODEL`, default `claude-opus-5-5`;
 `CLAUDE_EFFORT`, default `medium`), reached through Anthropic's SDK: choosing
 it switches the room to it instead of the cluster's model, for everyone, like

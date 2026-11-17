@@ -174,10 +174,12 @@ except ImportError:
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-5-5")
 CLAUDE_NICK = os.environ.get("CLAUDE_NICK", "claude")
 CLAUDE_EFFORT = os.environ.get("CLAUDE_EFFORT", "medium")   # low | medium | high | xhigh | max
-CLAUDE_ENABLED = bool(anthropic and os.environ.get("ANTHROPIC_API_KEY"))
+# The key comes from ANTHROPIC_API_KEY, or from the Secret an admin fills in
+# through the box in the model menu (see claude_key).
+CLAUDE_SECRET = os.environ.get("CLAUDE_SECRET", "aviary-claude")
 CLAUDE_CHOICE = "claude"   # its name in the model menu and in the saved choice
 # The room (the whiteboard) is there when anything can answer in it.
-ROOM_ENABLED = CHAT_ENABLED or CLAUDE_ENABLED
+ROOM_ENABLED = CHAT_ENABLED or bool(anthropic)   # (with the SDK, a key can be entered in the room)
 CHAT_NICK = os.environ.get("CHAT_NICK", "")
 CHAT_STATE_CONFIGMAP = os.environ.get("CHAT_STATE_CONFIGMAP", "aviary-chat")
 # Ollama's own API (model list, pulls) lives beside its OpenAI-compatible one.
@@ -1468,6 +1470,8 @@ CHAT_CSS = """
  #md form input { flex: 1 1 auto; min-width: 0; }
  #md .md-pull { min-height: 20px; margin-top: 8px; font-size: 13px; color: #555; }
  #md .md-pull.err { color: #b00020; }
+ #md .md-keymsg { min-height: 20px; margin-top: 8px; font-size: 13px; color: #555; }
+ #md .md-keymsg.err { color: #b00020; }
  #md .md-foot { text-align: right; margin-top: 14px; }
 """
 
@@ -1484,6 +1488,8 @@ CHAT_HTML = """
  <div class="md-list"></div>
  <form><input type="text" placeholder="install: llama3.3:70b  or  hf.co/user/repo:Q4_K_M" aria-label="Model to install" autocomplete="off"><button class="go">Install</button></form>
  <div class="md-pull"></div>
+ <form class="md-key" hidden><input type="password" placeholder="Anthropic API key (sk-ant-...): adds Claude to the list" aria-label="Anthropic API key" autocomplete="off" spellcheck="false"><button class="go">Save</button><button type="button" class="rm" hidden>Remove</button></form>
+ <div class="md-keymsg"></div>
  <div class="md-foot"><button type="button" class="cancel">Close</button></div>
 </dialog>
 <script>
@@ -1641,6 +1647,7 @@ CHAT_HTML = """
   }
   function say2(text, err) { pmsg.textContent = text; pmsg.classList.toggle('err', !!err); }
   function draw(d) {
+    kstate(d.claude);
     list.textContent = '';
     if (d.note) list.appendChild(el('div', 'md-m', d.note));
     else if (!d.models.length) list.appendChild(el('div', 'md-m', 'No models installed yet.'));
@@ -1666,6 +1673,28 @@ CHAT_HTML = """
     clearTimeout(ptimer);
     if (!p.done && dlg.open) ptimer = setTimeout(refresh, 1500);
   }
+  // The API key box (admins): entering a key puts Claude in the list above.
+  // The key goes to the server and is not shown again -- only how it ends.
+  var kform = dlg.querySelector('form.md-key'), kin = kform.querySelector('input'), krm = kform.querySelector('.rm');
+  var kmsg = dlg.querySelector('.md-keymsg');
+  function kstate(c) {
+    kform.hidden = !(c && c.box) || c.from_env;
+    krm.hidden = !(c && c.set);
+    if (!c || !c.box) { kmsg.textContent = ''; return; }
+    kmsg.classList.remove('err');
+    kmsg.textContent = c.from_env ? 'Claude\u2019s API key is set in the deployment.'
+      : c.set ? 'Claude has an API key' + (c.ends ? ' (ending \u2026' + c.ends + ')' : '') + '. Enter another to replace it.'
+      : 'With an Anthropic API key, Claude is one more model to choose. Replies are billed to the key, and the room is sent to Anthropic while Claude is the model.';
+  }
+  function ksave(key) {
+    return fetch('/api/chat/claude-key', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+                                           body: JSON.stringify({ key: key }) })
+      .then(function (r) { return r.text().then(function (t) { if (!r.ok) throw new Error(t.trim() || ('HTTP ' + r.status)); return t.trim(); }); })
+      .then(function (t) { kin.value = ''; tick(); return refresh().then(function () { if (/could not be checked/.test(t)) kmsg.textContent = 'Key ' + t + '.'; }); })
+      .catch(function (e) { kmsg.textContent = e.message; kmsg.classList.add('err'); });
+  }
+  kform.onsubmit = function (e) { e.preventDefault(); var k = kin.value.trim(); if (k) ksave(k); };
+  krm.onclick = function () { if (confirm('Remove the API key? Claude leaves the model menu.')) ksave(''); };
   function refresh() {
     return fetch('/api/chat/models', { credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : r.text().then(function (t) { throw new Error(t.trim() || ('HTTP ' + r.status)); }); })
@@ -2614,6 +2643,56 @@ _chosen = {"loaded": False, "model": ""}
 _pull = {}   # the install in progress or last finished: {name, status, pct, error, done}
 
 
+_ckey = {"loaded": False, "key": ""}
+_ckeylock = threading.Lock()
+
+
+def claude_key():
+    """The Anthropic API key Claude answers with: ANTHROPIC_API_KEY if the
+    deployment sets one, else the one an admin entered in the model menu, kept
+    in the Secret CLAUDE_SECRET (read once, then held in memory). "" if none."""
+    env = os.environ.get("ANTHROPIC_API_KEY", "")
+    if env:
+        return env
+    with _ckeylock:
+        if not _ckey["loaded"]:
+            _ckey["loaded"] = True
+            try:
+                sec = client.CoreV1Api().read_namespaced_secret(CLAUDE_SECRET, self_namespace())
+                _ckey["key"] = base64.b64decode((sec.data or {}).get("api_key", "")).decode().strip()
+            except Exception:
+                pass  # none saved
+        return _ckey["key"]
+
+
+def claude_enabled():
+    return bool(anthropic and claude_key())
+
+
+def claude_key_set(key):
+    """Save (or, with "", remove) the key entered in the model menu."""
+    v1, ns = client.CoreV1Api(), self_namespace()
+    if key:
+        body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                "metadata": {"name": CLAUDE_SECRET, "namespace": ns,
+                             "labels": {"app.kubernetes.io/managed-by": "aviary-frontend"}},
+                "stringData": {"api_key": key}}
+        try:
+            v1.replace_namespaced_secret(CLAUDE_SECRET, ns, body)
+        except client.exceptions.ApiException as e:
+            if e.status != 404:
+                raise
+            v1.create_namespaced_secret(ns, body)
+    else:
+        try:
+            v1.delete_namespaced_secret(CLAUDE_SECRET, ns)
+        except client.exceptions.ApiException as e:
+            if e.status != 404:
+                raise
+    with _ckeylock:
+        _ckey.update(loaded=True, key=key)
+
+
 def chat_model():
     if not _chosen["loaded"]:
         _chosen["loaded"] = True
@@ -2624,7 +2703,7 @@ def chat_model():
             except Exception:
                 pass  # never chosen: the default
     chosen = _chosen["model"]
-    if chosen == CLAUDE_CHOICE and not CLAUDE_ENABLED:
+    if chosen == CLAUDE_CHOICE and not claude_enabled():
         chosen = ""   # it was chosen, then its key went away
     return chosen or (CHAT_MODEL if CHAT_ENABLED else CLAUDE_CHOICE)
 
@@ -2741,7 +2820,7 @@ def chat_models():
              "detail": " ".join(filter(None, [(m.get("details") or {}).get("parameter_size", ""),
                                               (m.get("details") or {}).get("quantization_level", "")]))}
             for m in tags.get("models", [])), key=lambda m: m["name"])
-    if CLAUDE_ENABLED:
+    if claude_enabled():
         models.append({"name": CLAUDE_CHOICE, "size": 0, "detail": f"{CLAUDE_MODEL}, over Anthropic's API (no GPU needed)"})
     return models
 
@@ -3210,8 +3289,9 @@ _claude = {"client": None}
 
 
 def _claude_client():
-    if _claude["client"] is None:
-        _claude["client"] = anthropic.Anthropic()   # ANTHROPIC_API_KEY from the environment
+    key = claude_key()
+    if _claude["client"] is None or _claude.get("key") != key:
+        _claude["client"], _claude["key"] = anthropic.Anthropic(api_key=key), key
     return _claude["client"]
 
 
@@ -3561,7 +3641,52 @@ def api_chat_models():
                 if _chat_away_gpu() else "The cluster's model server (Ollama) is not answering, or has no models installed.")
     response.content_type = "application/json"
     response.set_header("Cache-Control", "no-store")
-    return json.dumps({"current": chat_model(), "nick": chat_nick(), "models": models, "note": note, "pull": _pull or None})
+    # The key box: for admins, when the SDK is there. The key itself never
+    # goes back to the page -- only whether there is one and how it ends.
+    key = claude_key()
+    claude = {"box": bool(anthropic) and _is_admin(), "set": bool(key), "ends": key[-4:] if len(key) > 12 else "",
+              "from_env": bool(os.environ.get("ANTHROPIC_API_KEY"))}
+    return json.dumps({"current": chat_model(), "nick": chat_nick(), "models": models, "note": note, "claude": claude,
+                       "pull": _pull or None})
+
+
+@app.route("/api/chat/claude-key", method="POST")
+def api_chat_claude_key():
+    """An admin enters (or, with an empty key, removes) the Anthropic API key
+    that puts Claude in the model menu. The key is tried against Anthropic's
+    API before it is kept, and is stored in a Secret; it is never sent back."""
+    if not anthropic:
+        return _chat_error(404, "the Anthropic SDK is not installed in this image\n")
+    if not _is_admin():
+        return _chat_error(403, "the API key is for admins to set\n")
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return _chat_error(409, "the key is set in the deployment (ANTHROPIC_API_KEY): change it there\n")
+    try:
+        key = str((request.json or {}).get("key", "")).strip()
+    except Exception:
+        key = ""
+    if key and (len(key) < 20 or len(key) > 400 or not re.fullmatch(r"[A-Za-z0-9_\-]+", key)):
+        return _chat_error(400, "that does not look like an API key\n")
+    unchecked = ""
+    if key:
+        try:
+            anthropic.Anthropic(api_key=key).models.retrieve(CLAUDE_MODEL)
+        except anthropic.AuthenticationError:
+            return _chat_error(400, "Anthropic did not accept that key\n")
+        except anthropic.PermissionDeniedError:
+            return _chat_error(400, f"that key may not use {CLAUDE_MODEL}\n")
+        except anthropic.NotFoundError:
+            return _chat_error(400, f"Anthropic accepted the key but does not know the model {CLAUDE_MODEL}\n")
+        except (anthropic.APIConnectionError, anthropic.APIStatusError) as e:
+            # Could not be checked (no way out to the API, or it is having a moment): keep it, and say so.
+            unchecked = f", but it could not be checked ({type(e).__name__})"
+    try:
+        claude_key_set(key)
+    except client.exceptions.ApiException as e:
+        return _chat_error(502, f"could not save the key: {e.reason}\n")
+    with _roomlock:
+        _room_say("*", f"{_chat_nick()} {'added Claude to the model menu' if key else 'took Claude out of the model menu'}", bot=True)
+    return ("saved" if key else "removed") + unchecked + "\n"
 
 
 @app.route("/api/chat/model", method="POST")

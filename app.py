@@ -850,7 +850,51 @@ def app_resources(ns):
             "request": min(r, l) / unit[res],
             "limit": l / unit[res],
         }
+    try:
+        out["workloads"] = app_workloads(ns)
+    except client.exceptions.ApiException:
+        out["workloads"] = []
+    out["scale_max"] = SCALE_MAX
     return out
+
+
+SCALE_MAX = max(1, int(os.environ.get("SCALE_MAX", "10")))   # most pods the popup will set on one workload
+_SCALABLE = (("deployment", "Deployment"), ("statefulset", "StatefulSet"))
+
+
+def app_workloads(ns):
+    """[{kind, name, replicas, ready}] for the Deployments and StatefulSets of
+    an app: what the popup can set a number of pods on. Not this page's own
+    Deployment: its chat room and drawing live in one process's memory, and it
+    could not be scaled back up from zero."""
+    apps, out = client.AppsV1Api(), []
+    for kind, lister in (("deployment", apps.list_namespaced_deployment), ("statefulset", apps.list_namespaced_stateful_set)):
+        for w in lister(ns).items:
+            if ns == self_namespace() and w.metadata.name == "aviary-frontend":
+                continue
+            out.append({"kind": kind, "name": w.metadata.name, "replicas": w.spec.replicas or 0,
+                        "ready": w.status.ready_replicas or 0})
+    return sorted(out, key=lambda w: (w["name"], w["kind"]))
+
+
+def scale_workloads(ns, wanted):
+    """Set the number of pods on some of an app's workloads: wanted is
+    {(kind, name): replicas}. Only what differs is touched. Returns how many
+    were changed. (For a helm-installed app the next helm upgrade puts the
+    chart's number back.)"""
+    apps = client.AppsV1Api()
+    patch = {"deployment": apps.patch_namespaced_deployment_scale, "statefulset": apps.patch_namespaced_stateful_set_scale}
+    now = {(w["kind"], w["name"]): w["replicas"] for w in app_workloads(ns)}
+    changed = 0
+    for key, n in wanted.items():
+        if key not in now:
+            raise ValueError(f"no {key[0]} {key[1]} here")
+        if not 0 <= n <= SCALE_MAX:
+            raise ValueError(f"{key[1]}: pods must be between 0 and {SCALE_MAX}")
+        if n != now[key]:
+            patch[key[0]](key[1], ns, {"spec": {"replicas": n}})
+            changed += 1
+    return changed
 
 
 def app_namespaces():
@@ -1336,6 +1380,13 @@ RL_CSS = """
  #rl .rl-vals { display: flex; justify-content: space-between; font-size: 13px; color: #555;
    font-variant-numeric: tabular-nums; margin-top: 2px; }
  #rl .rl-vals b { color: #1a4d8f; }
+ #rl .rl-pods { margin: 4px 0 18px; }
+ #rl .rl-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; max-height: 30vh; overflow-y: auto; }
+ #rl .rl-list label { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: #f5f6f8; border-radius: 8px; }
+ #rl .rl-list code { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font: 13px/1.4 ui-monospace, monospace; }
+ #rl .rl-list small { flex: 0 0 auto; color: #777; font-size: 12px; white-space: nowrap; }
+ #rl .rl-list input { flex: 0 0 auto; width: 4.5em; padding: 4px 6px; font-size: 14px; border: 1px solid #d8dde5; border-radius: 6px;
+   text-align: right; }
  #rl .rl-foot { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
  #rl .rl-foot label { flex: 1 1 auto; font-size: 14px; color: #444; }
  #rl .rl-foot button { cursor: pointer; padding: 7px 16px; border-radius: 6px; border: 1px solid #d8dde5;
@@ -1634,9 +1685,10 @@ CHAT_HTML = """
 
 RL_HTML = """
 <dialog id="rl"><form method="post">
- <h3>Requests &amp; limits: <span id="rl-app"></span></h3>
- <p class="note">Defaults for each container in this app that sets none of its own
- (a namespace LimitRange). The bar is filled to the app's busiest container.</p>
+ <h3>Scale: <span id="rl-app"></span></h3>
+ <p class="note">Requests and limits are defaults for each container in this app that sets none
+ of its own (a namespace LimitRange); the bar is filled to the app's busiest container. Pods are
+ set per workload: one that keeps its data on a volume of its own usually cannot run more than one.</p>
  <div class="rl-row" data-res="cpu"><div class="rl-head"><b>CPU</b><span class="now"></span></div>
   <div class="rl-slider"><div class="rl-track"><div class="rl-fill"></div></div><div class="rl-band"></div>
    <input type="range" class="lo" min="0" max="1000" step="1" aria-label="CPU request">
@@ -1649,7 +1701,9 @@ RL_HTML = """
    <input type="range" class="hi" min="0" max="1000" step="1" aria-label="Memory limit"></div>
   <div class="rl-vals"><span>request <b class="req"></b></span><span>limit <b class="lim"></b></span></div>
   <input type="hidden" name="mem_request"><input type="hidden" name="mem_limit"></div>
- <div class="rl-foot"><label><input type="checkbox" name="restart" value="1"> restart the app now to apply</label>
+ <div class="rl-pods"><div class="rl-head"><b>Pods</b><span class="now">how many of each workload run</span></div>
+  <div class="rl-list"></div></div>
+ <div class="rl-foot"><label><input type="checkbox" name="restart" value="1"> restart the app now to apply the limits</label>
   <button type="button" class="cancel">Cancel</button><button class="go">Apply</button></div>
  <div class="rl-err"></div>
 </form></dialog>
@@ -1709,6 +1763,17 @@ RL_HTML = """
         document.getElementById('rl-app').textContent = b.dataset.app;
         form.restart.checked = false; err.textContent = '';
         dlg.querySelectorAll('.rl-row').forEach(function (row) { setup(row, d[row.dataset.res]); });
+        // One line per workload: its name, how many pods are ready, and a number to change.
+        var list = dlg.querySelector('.rl-list'); list.textContent = '';
+        (d.workloads || []).forEach(function (w) {
+          var line = document.createElement('label'), name = document.createElement('code'), was = document.createElement('small');
+          var n = document.createElement('input');
+          name.textContent = w.name; was.textContent = w.kind + ', ' + w.ready + ' of ' + w.replicas + ' ready';
+          n.type = 'number'; n.min = 0; n.max = d.scale_max; n.step = 1; n.required = true; n.value = w.replicas;
+          n.name = 'scale.' + w.kind + '.' + w.name; n.setAttribute('aria-label', 'pods for ' + w.name);
+          line.appendChild(name); line.appendChild(was); line.appendChild(n); list.appendChild(line);
+        });
+        dlg.querySelector('.rl-pods').hidden = !(d.workloads || []).length;
         dlg.showModal();
       })
       .catch(function (x) { alert('Could not load requests and limits (' + x + ')'); });
@@ -2394,13 +2459,13 @@ def index():
             warn = (
                 f'<button type="button" class="warn" data-ns="{html.escape(ns)}" '
                 f'data-app="{html.escape(label)}" title="{html.escape(tip)} '
-                f'&#10;click to set requests and limits">!</button>'
+                f'&#10;click to set requests, limits and number of pods">!</button>'
             )
-        elif ns in m["tuned"]:
-            # Nothing missing any more, but keep a way back to the sliders.
+        else:
+            # Nothing missing: the way to the sliders and to the number of pods.
             warn = (
                 f'<button type="button" class="warn set" data-ns="{html.escape(ns)}" '
-                f'data-app="{html.escape(label)}" title="adjust requests and limits">&#8660;</button>'
+                f'data-app="{html.escape(label)}" title="scale: requests, limits and number of pods">&#8660;</button>'
             )
         rel = _release_for(ns, label, rels)
         off = bool(rel) and rels.get((ns, rel)) == "uninstalled"
@@ -3615,7 +3680,8 @@ def api_app_resources(ns):
 @app.route("/app/<ns>/resources", method="POST")
 def app_resources_set(ns):
     """Save the popup: write the app's LimitRange (default request and limit for
-    containers that set none) and, if asked, roll its workloads to apply it."""
+    containers that set none), set the number of pods on the workloads whose
+    number was changed, and, if asked, roll its workloads to apply the limits."""
     if ns not in app_namespaces():
         raise HTTPError(404, "no such app\n")
     cur = app_resources(ns)
@@ -3640,6 +3706,15 @@ def app_resources_set(ns):
             "default": {"cpu": f"{val['cpu_limit']}m", "memory": f"{val['mem_limit']}Mi"},
         }]},
     }
+    # Pods: fields named scale.<kind>.<name>, one per workload in the popup.
+    wanted = {}
+    for field in request.forms:
+        if field.startswith("scale."):
+            _, kind, name = (field.split(".", 2) + ["", ""])[:3]
+            try:
+                wanted[(kind, name)] = int(request.forms.get(field, ""))
+            except ValueError:
+                raise HTTPError(400, f"{name}: pods must be a whole number\n")
     v1 = client.CoreV1Api()
     try:
         v1.replace_namespaced_limit_range(LIMITRANGE, ns, body)
@@ -3647,6 +3722,12 @@ def app_resources_set(ns):
         if e.status != 404:
             raise
         v1.create_namespaced_limit_range(ns, body)
+    try:
+        scale_workloads(ns, wanted)
+    except ValueError as e:
+        raise HTTPError(400, f"{e}\n")
+    except client.exceptions.ApiException as e:
+        raise HTTPError(502, f"could not scale: {e.reason}\n")
     if request.forms.get("restart"):
         restart_workloads(ns)
     _bump()

@@ -2570,6 +2570,27 @@ def _chat_html(gpus):
     return page
 
 
+_briefing = {"at": 0.0, "text": ""}
+CHAT_BRIEFING_MAX = 24000   # characters of briefing handed to the model
+
+
+def _chat_briefing():
+    """What the model is told about this place beyond the list of apps: how
+    sign-in works, what each thing is for, who to ask. It is the `briefing` key
+    of the chat ConfigMap, so it is edited with kubectl, not a rebuild; re-read
+    once a minute. No ConfigMap or no key: nothing."""
+    if not CHAT_STATE_CONFIGMAP:
+        return ""
+    if time.time() - _briefing["at"] > 60:
+        _briefing["at"] = time.time()
+        try:
+            cm = client.CoreV1Api().read_namespaced_config_map(CHAT_STATE_CONFIGMAP, self_namespace())
+            _briefing["text"] = ((cm.data or {}).get("briefing") or "").strip()[:CHAT_BRIEFING_MAX]
+        except Exception:
+            pass  # keep what we had
+    return _briefing["text"]
+
+
 def _chat_system():
     """The system prompt: who the model is here, and what this cluster serves
     (from the same snapshot the menu is drawn from), so it can point at things."""
@@ -2582,6 +2603,10 @@ def _chat_system():
         pass  # no cluster view: it can still chat
     where = f" for the cluster at {BASE_DOMAIN}" if BASE_DOMAIN else ""
     apps = ("\nWhat the cluster serves:\n" + "\n".join(lines)) if lines else ""
+    briefing = _chat_briefing()
+    if briefing:
+        apps += ("\n\nWhat you know about this place (background from its admins: use it to answer, "
+                 "and prefer a live lookup where the two could differ):\n" + briefing)
     return (
         f"You are {chat_nick()}, the assistant in the chat room on Aviary, the landing page{where}. "
         "The room is shared, IRC style: everyone on the page sees it, and what people say "

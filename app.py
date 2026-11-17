@@ -85,6 +85,10 @@ BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")             # https://<bas
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
 BYPASS_TOKEN = os.environ.get("BYPASS_TOKEN", "")
 ADMIN_ONLY = os.environ.get("OAUTH_ADMIN_ONLY", "false").lower() in ("1", "true", "yes")
+# Who counts as an admin on this page, besides gitea's site administrators:
+# members of this gitea team ("org:team"). The gateway's gates in front of the
+# System apps go by the same team (the groups claim of gitea's ID token).
+ADMIN_TEAM = os.environ.get("ADMIN_TEAM", "aviary:admins").lower()
 AUTH_ENABLED = bool(OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET and OAUTH_ISSUER and SESSION_SECRET and BASE_URL)
 REDIRECT_URI = f"{BASE_URL}/oauth/callback"
 _GITEA_API = GITEA_INTERNAL or OAUTH_ISSUER
@@ -1710,7 +1714,8 @@ PAGE = """<!doctype html>
  ul.menu li:hover {{ background: #fffbe6; }}
  ul.menu li.head, ul.menu li.head:hover {{ background: none; box-shadow: none; padding-top: 0; padding-bottom: 0;
                                           margin-bottom: -4px; }}
- ul.menu li.off {{ opacity: .55; filter: grayscale(1); }}
+ ul.menu li.off, ul.menu li.locked {{ opacity: .55; filter: grayscale(1); }}
+ ul.menu li.locked:hover {{ background: rgba(255,255,255,.85); }}
  ul.menu li .app {{ flex: 1 1 auto; min-width: 0; }}
  ul.menu li .app a {{ text-decoration: none; color: #1a4d8f; font-size: 20px; }}
  /* The whole row is the link: the app's name stretches over its box, and the
@@ -1819,6 +1824,55 @@ def _session_user():
         return None
 
 
+def _is_admin():
+    """Whether the person asking is an admin: a gitea site administrator or a
+    member of ADMIN_TEAM (as gitea said at login; a session from before this
+    was recorded counts as not). With
+    login off, or with the bypass token, everyone is: there is nobody to tell
+    apart."""
+    if not AUTH_ENABLED or _bypass_ok():
+        return True
+    try:
+        return request.get_cookie("aviary_admin", secret=SESSION_SECRET) == "1"
+    except Exception:
+        return False
+
+
+def _gitea_admin(user, access):
+    """Admin, as gitea has it at login: a site administrator, or a member of
+    ADMIN_TEAM. A team lookup that fails counts as not a member."""
+    if user.get("is_admin"):
+        return True
+    if not ADMIN_TEAM:
+        return False
+    try:
+        teams = _http_get_json(f"{_GITEA_API}/api/v1/user/teams?limit=50", access)
+        return any(f"{(t.get('organization') or {}).get('username', '')}:{t.get('name', '')}".lower() == ADMIN_TEAM
+                   for t in teams)
+    except Exception:
+        return False
+
+
+def _system_namespaces():
+    """Namespaces of what the menu lists under System (this page's included):
+    only admins may use their controls."""
+    d = snapshot()
+    return {r[1] for r in list(d["routes"]) + list(d.get("l4", []))
+            if r[2] == "aviary-frontend" or _is_system(r[0], r[2], r[5])}
+
+
+@app.hook("before_request")
+def _system_gate():
+    """The controls of a System entry (POST /app/<namespace>/...) are for
+    admins. The page does not draw them for anyone else; this is the check
+    behind that."""
+    if request.method != "POST" or not request.path.startswith("/app/"):
+        return
+    ns = request.path.split("/")[2] if request.path.count("/") >= 2 else ""
+    if ns in _system_namespaces() and not _is_admin():
+        raise HTTPError(403, "system apps are for admins\n")
+
+
 @app.hook("before_request")
 def _auth_gate():
     if not AUTH_ENABLED or request.path in _PUBLIC_PATHS:
@@ -1868,12 +1922,15 @@ def oauth_callback():
     response.delete_cookie("oauth_state", path="/")
     response.set_cookie("aviary_session", username, secret=SESSION_SECRET, httponly=True,
                         secure=True, samesite="lax", max_age=43200, path="/")
+    response.set_cookie("aviary_admin", "1" if _gitea_admin(user, access) else "0", secret=SESSION_SECRET,
+                        httponly=True, secure=True, samesite="lax", max_age=43200, path="/")
     redirect("/")
 
 
 @app.route("/logout")
 def logout():
     response.delete_cookie("aviary_session", path="/", secure=True, samesite="lax")
+    response.delete_cookie("aviary_admin", path="/", secure=True, samesite="lax")
     # Don't bounce to /login: gitea's SSO session is still live, so it would
     # silently re-authenticate and the logout would look like it did nothing.
     return (
@@ -1906,6 +1963,7 @@ def index():
     gws = d["gateways"]
     shown = [(k, gw) for k, gw in EXPOSURES if (GATEWAY_NAMESPACE, gw) in gws]
     rows = [(r, False) for r in d["routes"]] + [(r, True) for r in d.get("l4", [])]
+    admin = _is_admin()
     for (host, ns, svc, port, ip, group, rns, rname, exposed, pub), l4 in rows:
         me_too = svc == "aviary-frontend"  # that's us: listed first under System
         label = host.split(".", 1)[0]
@@ -1958,8 +2016,16 @@ def index():
             f'data-app="{html.escape(label)}" title="workloads and images">&#9776;</button></div>'
         )
         is_system = _is_system(host, svc, group)
+        # System entries are for admins: anyone else sees them greyed out, with
+        # no link and no controls (and _system_gate refuses the controls).
+        locked = (is_system or me_too) and not admin
+        if locked:
+            warn, act, restart, images = "", '<div class="act"></div>', '<div class="act"></div>', '<div class="act"></div>'
         switches = ""
         for key, gw in shown:
+            if locked:
+                switches += '<div class="sw"></div>'
+                continue
             # System web pages have no switches; a system service that is not
             # a page (DNS) keeps its own: turning it off cannot lock anyone out.
             if is_system and not l4:
@@ -1988,8 +2054,9 @@ def index():
                 f"</form>"
             )
         row = (
-            f'<li class="{"off" if off else ""}"><div class="app">'
-            + (f'<span class="noweb" title="not a web page: {html.escape(svc)} port {port}">{html.escape(label)}</span>'
+            f'<li class="{"locked" if locked else "off" if off else ""}"><div class="app">'
+            + (f'<span class="noweb" title="for admins">{html.escape(label)}</span>' if locked else
+               f'<span class="noweb" title="not a web page: {html.escape(svc)} port {port}">{html.escape(label)}</span>'
                if l4 or label in NOWEB else f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>') +
             f"<small>{html.escape(blurb)}</small></div>"
             f'<div class="stats">'

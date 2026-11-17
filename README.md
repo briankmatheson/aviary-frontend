@@ -21,7 +21,8 @@ secret.
 Each app row ends in two switches, **private** and **public**: they attach
 the app's `HTTPRoute` to, or detach it from, the internal Gateway (`aviary`)
 and the NATed one (`aviary-nat`, aviary-deploy's `nat_gateway_ip`). System
-entries have none. Override the names with `GATEWAY_NAMESPACE`,
+entries have none. System entries are for admins (gitea site administrators and members of
+the gitea team `ADMIN_TEAM`, default `aviary:admins`): anyone else sees them greyed out, with no link and no controls. Override the names with `GATEWAY_NAMESPACE`,
 `PRIVATE_GATEWAY`, `PUBLIC_GATEWAY`.
 
 With `CHAT_URL` set to an OpenAI-compatible API (the cluster's Ollama:

@@ -987,6 +987,12 @@ def app_resources(ns):
         except client.exceptions.ApiException:
             pass
     out["namespaces"] = nss
+    # The tile's figures (the whole app, summed over its namespaces), beside
+    # the per-container ones above: the two differ, and people compare them.
+    m = (_cache.get("data") or {}).get("metrics") or {}
+    for key, now_k, peak_k, unit_k in (("cpu", "cpu", "cpu_peak", 1e-3), ("mem", "mem", "mem_peak", 2**20)):
+        tot = lambda k: sum(m.get(k, {}).get(x, 0) for x in nss) / unit_k
+        out[key]["app_usage"], out[key]["app_peak"] = tot(now_k), max(tot(peak_k), tot(now_k))
     out["scale_max"] = scale_max()
     return out
 
@@ -1001,13 +1007,35 @@ def app_workloads(ns):
     Deployment: its chat room and drawing live in one process's memory, and it
     could not be scaled back up from zero."""
     apps, out = client.AppsV1Api(), []
+    try:
+        # Claims more than one pod can mount at once (ReadWriteMany / ReadOnlyMany).
+        shared = {c.metadata.name for c in client.CoreV1Api().list_namespaced_persistent_volume_claim(ns).items
+                  if set(c.spec.access_modes or []) & {"ReadWriteMany", "ReadOnlyMany"}}
+    except Exception:
+        shared = None   # cannot tell: nothing is held back on that account
     for kind, lister in (("deployment", apps.list_namespaced_deployment), ("statefulset", apps.list_namespaced_stateful_set)):
         for w in lister(ns).items:
             if ns == self_namespace() and w.metadata.name == "aviary-frontend":
                 continue
             out.append({"kind": kind, "ns": ns, "name": w.metadata.name, "replicas": w.spec.replicas or 0,
-                        "ready": w.status.ready_replicas or 0})
+                        "ready": w.status.ready_replicas or 0, "fixed": _not_scalable(w, shared)})
     return sorted(out, key=lambda w: (w["name"], w["kind"]))
+
+
+def _not_scalable(w, shared):
+    """Why a workload's number of pods is not for the popup to set ("" if it
+    is): something else owns the number, or its pods share one volume that
+    only one of them can attach. (A StatefulSet's per-pod volumes, its
+    volumeClaimTemplates, do not count: each pod gets its own.)"""
+    owner = next(iter(w.metadata.owner_references or []), None)
+    if owner:
+        return f"managed by {owner.kind} {owner.name}, which sets its pods"
+    if shared is not None:
+        for v in w.spec.template.spec.volumes or []:
+            claim = v.persistent_volume_claim
+            if claim and claim.claim_name not in shared:
+                return f"keeps its data on a volume only one pod can attach ({claim.claim_name})"
+    return ""
 
 
 def scale_workloads(ns, wanted):
@@ -1017,13 +1045,16 @@ def scale_workloads(ns, wanted):
     a helm-installed app the next helm upgrade puts the chart's number back.)"""
     apps = client.AppsV1Api()
     patch = {"deployment": apps.patch_namespaced_deployment_scale, "statefulset": apps.patch_namespaced_stateful_set_scale}
-    now = {(w["kind"], w["ns"], w["name"]): w["replicas"] for x in tile_namespaces(ns) for w in app_workloads(x)}
+    found = {(w["kind"], w["ns"], w["name"]): w for x in tile_namespaces(ns) for w in app_workloads(x)}
+    now = {k: w["replicas"] for k, w in found.items()}
     changed = 0
     for key, n in wanted.items():
         if key not in now:
             raise ValueError(f"no {key[0]} {key[2]} in {key[1]}")
         if not 0 <= n <= scale_max():
             raise ValueError(f"{key[2]}: pods must be between 0 and {scale_max()}")
+        if n != now[key] and n > 1 and found[key]["fixed"]:
+            raise ValueError(f"{key[2]} cannot run more than one pod: it {found[key]['fixed']}")
         if n != now[key]:
             patch[key[0]](key[2], key[1], {"spec": {"replicas": n}})
             changed += 1
@@ -1553,7 +1584,15 @@ RL_CSS = """
  ul.menu li .act .warn.set { background: #c9ced6; color: #555; font-size: 13px; }
  ul.menu li .act .warn.set:hover { background: #b3bac4; }
  /* Opened at the click, before its figures have arrived: same size, nothing to press. */
- dialog#rl.loading form > :not(h3):not(.note) { visibility: hidden; }
+ dialog#rl.loading form > :not(h3):not(.note):not(.rl-foot) { visibility: hidden; }
+ dialog#rl.loading .rl-foot label { visibility: hidden; }
+ #rl .rl-foot button.go:disabled { background: #c9ced6; border-color: #c9ced6; color: #fff; cursor: default; }
+ #rl .rl-foot .rl-gap { flex: 1 1 auto; }
+ #rl .rl-list label.fixed { flex-wrap: wrap; row-gap: 2px; }
+ #rl .rl-list label.fixed > * { opacity: .55; }
+ #rl .rl-list label.fixed small.why { flex: 1 1 100%; white-space: normal; font-style: italic; }
+ #rl .rl-list input:disabled { background: #eceef1; cursor: not-allowed; }
+ #rl .rl-head .now { text-align: right; }
  dialog#rl.loading h3::after { content: " \\2026"; font-weight: normal; opacity: .6; }
  dialog#rl { border: 0; border-radius: 10px; padding: 22px 26px; width: min(560px, 92vw);
    box-shadow: 0 12px 40px rgba(0,0,0,.3); font: 15px/1.4 system-ui, sans-serif; color: #222; }
@@ -1594,7 +1633,7 @@ RL_CSS = """
  #rl .rl-list input { flex: 0 0 auto; width: 4.5em; padding: 4px 6px; font-size: 14px; border: 1px solid #d8dde5; border-radius: 6px;
    text-align: right; }
  #rl .rl-foot { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
- #rl .rl-foot label { flex: 1 1 auto; font-size: 14px; color: #444; }
+ #rl .rl-foot label { flex: 0 0 auto; font-size: 14px; color: #444; cursor: pointer; }
  #rl .rl-foot button { cursor: pointer; padding: 7px 16px; border-radius: 6px; border: 1px solid #d8dde5;
    background: #fff; font-size: 14px; }
  #rl .rl-foot button.go { background: #1a4d8f; border-color: #1a4d8f; color: #fff; }
@@ -1999,10 +2038,11 @@ RL_HTML = """
 <dialog id="rl"><form method="post">
  <h3>Scale: <span id="rl-app"></span></h3>
  <p class="note">Requests and limits are defaults for each container in this app that sets none
- of its own (a namespace LimitRange); the bar is filled to the app's busiest container, and the red
- line is the high-water mark: the most one container has used. Slide a limit
- all the way down for no limit. Pods are
- set per workload: one that keeps its data on a volume of its own usually cannot run more than one.</p>
+ of its own (a namespace LimitRange). They apply to each container, so the bar is filled to the app's
+ busiest container and the red line is the most one container has used; the whole app's figures, as on
+ its tile, are beside them. Slide a limit all the way down for no limit, a request all the way down
+ for a request of 0. Pods are set per workload; one
+ that cannot run more than one pod is greyed out, with the reason.</p>
  <div class="rl-row" data-res="cpu"><div class="rl-head"><b>CPU</b><span class="now"></span></div>
   <div class="rl-slider"><div class="rl-track"><div class="rl-fill"></div></div><div class="rl-band"></div><div class="rl-peak"></div>
    <input type="range" class="lo" min="0" max="1000" step="1" aria-label="CPU request">
@@ -2017,8 +2057,9 @@ RL_HTML = """
   <input type="hidden" name="mem_request"><input type="hidden" name="mem_limit"></div>
  <div class="rl-pods"><div class="rl-head"><b>Pods</b><span class="now">how many of each workload run</span></div>
   <div class="rl-list"></div></div>
- <div class="rl-foot"><label><input type="checkbox" name="restart" value="1"> restart the app now to apply the limits</label>
-  <button type="button" class="cancel">Cancel</button><button class="go">Apply</button></div>
+ <div class="rl-foot"><button type="button" class="cancel">Cancel</button><span class="rl-gap"></span>
+  <label title="roll every workload now, so running pods pick up the new requests and limits (otherwise they apply to pods started from now on)"><input type="checkbox" name="restart" value="1"> restart now</label>
+  <button class="go" disabled>Apply</button></div>
  <div class="rl-err"></div>
 </form></dialog>
 <script>
@@ -2030,6 +2071,9 @@ RL_HTML = """
   var dlg = document.getElementById('rl');
   if (!dlg || !dlg.showModal) return;
   var form = dlg.querySelector('form'), err = dlg.querySelector('.rl-err'), asked = 0;
+  var go = form.querySelector('button.go');
+  // Applying takes a moment (and a restart longer): one press, and say so.
+  form.addEventListener('submit', function () { setTimeout(function () { go.disabled = true; go.textContent = 'Applying\u2026'; }, 0); });
   function fmt(res, v) {
     if (res === 'cpu') return v < 1000 ? Math.round(v) + 'm' : (v / 1000).toFixed(1);
     return v < 1024 ? Math.round(v) + 'Mi' : (v / 1024).toFixed(1) + 'Gi';
@@ -2049,13 +2093,17 @@ RL_HTML = """
       // The limit thumb pulled all the way down: no limit (sent as 0). The
       // request stays where it is; containers run unlimited above it.
       var none = +hi.value <= 0 || (moved === hi && val(+hi.value) < (res === 'cpu' ? 2.5 : 2));
+      // The request thumb pulled all the way down: a request of 0 (containers
+      // that set none are promised nothing, and scheduled as if they need nothing).
+      var zero = +lo.value <= 0 || (moved === lo && val(+lo.value) < (res === 'cpu' ? 2.5 : 2));
+      if (zero) r = 0;
       if (none) l = 0;
       else {
         if (l < floor) l = floor;
         if (r > l) { if (moved === hi) r = l; else l = r; }
       }
       lo.value = pos(r); hi.value = none ? 0 : pos(l);
-      row.querySelector('.req').textContent = fmt(res, r);
+      row.querySelector('.req').textContent = zero ? '0' : fmt(res, r);
       row.querySelector('.lim').textContent = none ? 'none' : fmt(res, l);
       row.querySelector('[name=' + res + '_request]').value = r;
       row.querySelector('[name=' + res + '_limit]').value = l;
@@ -2076,7 +2124,11 @@ RL_HTML = """
     mark.hidden = !(peak > 0);
     mark.style.left = pos(peak) / 10 + '%';
     mark.title = 'high-water mark: the most one container has used, ' + fmt(res, peak);
-    row.querySelector('.now').textContent = 'busiest container now: ' + fmt(res, d.usage) + (peak > 0 ? ' \u00b7 high-water mark: ' + fmt(res, peak) : '');
+    // Both sets of figures: the whole app's (what its tile shows) and the
+    // busiest single container's (what a per-container limit has to clear).
+    row.querySelector('.now').textContent =
+      'app: ' + fmt(res, d.app_usage || 0) + ' now, ' + fmt(res, d.app_peak || 0) + ' high-water' +
+      ' \u00b7 busiest container: ' + fmt(res, d.usage) + ' now' + (peak > 0 ? ', ' + fmt(res, peak) + ' high-water' : '');
     draw();
   }
   document.addEventListener('click', function (e) {
@@ -2085,6 +2137,7 @@ RL_HTML = """
     // Open at the click; the figures are filled in when they arrive.
     var mine = ++asked;
     document.getElementById('rl-app').textContent = b.dataset.app;
+    go.disabled = true; go.textContent = 'Apply';
     dlg.classList.add('loading'); dlg.showModal();
     fetch('/api/app/' + encodeURIComponent(b.dataset.ns) + '/resources', { credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
@@ -2097,15 +2150,22 @@ RL_HTML = """
         var list = dlg.querySelector('.rl-list'); list.textContent = '';
         (d.workloads || []).forEach(function (w) {
           var line = document.createElement('label'), name = document.createElement('code'), was = document.createElement('small');
-          var n = document.createElement('input');
+          var n = document.createElement('input'), why = null;
           name.textContent = w.name;
           was.textContent = (w.ns !== b.dataset.ns ? w.ns + ', ' : '') + w.kind + ', ' + w.ready + ' of ' + w.replicas + ' ready';
           n.type = 'number'; n.min = 0; n.max = d.scale_max; n.step = 1; n.required = true; n.value = w.replicas;
+          if (w.fixed) {   // not for this popup to change: greyed out, with why
+            n.disabled = true; line.className = 'fixed'; line.title = w.name + ' ' + w.fixed;
+            why = document.createElement('small'); why.className = 'why'; why.textContent = w.fixed;
+          }
           n.name = 'scale.' + w.kind + '.' + w.ns + '.' + w.name; n.setAttribute('aria-label', 'pods for ' + w.name);
-          line.appendChild(name); line.appendChild(was); line.appendChild(n); list.appendChild(line);
+          line.appendChild(name); line.appendChild(was); line.appendChild(n);
+          if (why) line.appendChild(why);   // on a line of its own, under the name
+          list.appendChild(line);
         });
         dlg.querySelector('.rl-pods').hidden = !(d.workloads || []).length;
         dlg.classList.remove('loading');
+        go.disabled = false;   // only now is there something to apply
       })
       .catch(function (x) { if (mine !== asked) return; if (dlg.open) dlg.close(); alert('Could not load requests and limits (' + x + ')'); });
   });
@@ -2390,6 +2450,8 @@ DARK_CSS = """
  html[data-theme=dark] #rl .rl-slider input[type=range]::-webkit-slider-thumb { background: #001318; border-color: #00e5ff; }
  html[data-theme=dark] #rl .rl-slider input[type=range]::-moz-range-thumb { background: #001318; border-color: #00e5ff; }
  html[data-theme=dark] #rl .rl-list label, html[data-theme=dark] #im .im-w, html[data-theme=dark] #md .md-m { background: #07191e; }
+ html[data-theme=dark] #rl .rl-list input:disabled { background: #0a1214; color: #5c7378; }
+ html[data-theme=dark] #rl .rl-foot button.go:disabled { background: #17333a; border-color: #17333a; color: #5c7378; }
  html[data-theme=dark] #md .md-m.cur { background: #0b3640; }
  html[data-theme=dark] #rl .rl-list small, html[data-theme=dark] #im .im-w .im-name small, html[data-theme=dark] #md .md-m small { color: #6f9aa1; }
  html[data-theme=dark] #im .im-c code { color: #a9d9e1; }
@@ -4628,11 +4690,11 @@ def app_resources_set(ns):
         r, l = val[f"{key}_request"], val[f"{key}_limit"]
         if l == 0:
             # No limit: containers that set none run unlimited (only the request applies).
-            if not 0 < r <= cur[key]["top"]:
-                raise HTTPError(400, f"{name}: need 0 < request <= the largest node\n")
+            if not 0 <= r <= cur[key]["top"]:
+                raise HTTPError(400, f"{name}: need 0 <= request <= the largest node\n")
             continue
-        if not 0 < r <= l <= cur[key]["top"]:
-            raise HTTPError(400, f"{name}: need 0 < request <= limit <= the largest node (or limit 0 for none)\n")
+        if not 0 <= r <= l <= cur[key]["top"]:
+            raise HTTPError(400, f"{name}: need 0 <= request <= limit <= the largest node (or limit 0 for none)\n")
         if l < cur[key]["floor"]:
             raise HTTPError(400, f"{name}: a container here already requests more than that limit\n")
     limits = {res: f"{val[f'{key}_limit']}{suffix}" for key, res, suffix in (("cpu", "cpu", "m"), ("mem", "memory", "Mi"))
@@ -4643,6 +4705,8 @@ def app_resources_set(ns):
                      "labels": {"app.kubernetes.io/managed-by": "aviary-frontend"}},
         "spec": {"limits": [dict({
             "type": "Container",
+            # A request of 0 is written out ("0m"), not left off: with a limit
+            # and no default request, Kubernetes would use the limit as the request.
             "defaultRequest": {"cpu": f"{val['cpu_request']}m", "memory": f"{val['mem_request']}Mi"},
         }, **({"default": limits} if limits else {}))]},
     }

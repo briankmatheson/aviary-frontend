@@ -418,11 +418,57 @@ def gpu_count():
         return 0
 
 
-def _is_system(host, svc, group):
-    """Whether a route is listed under System (this page always is)."""
+# What the page knows about an app beyond its route comes from an AviaryApp
+# object (a cluster-scoped custom resource, group aviary.xdebbie.org) named
+# like its tile: the first label of its hostname.
+#
+#   spec.description   the line under the name
+#   spec.group         "apps" or "system": which list it is under, and so
+#                      whether its controls are for admins only
+#   spec.web           false: routed, but no page to open (name, no link)
+#   spec.namespaces    further namespaces whose usage, workloads and restart
+#                      belong to the tile (Drone's builds, say)
+#
+# Every field is optional, and so is the object: without one (or without the
+# CRD in the cluster) an app falls back to its route's aviary/group label,
+# namespaces labelled aviary/app, and the lists built in above.
+APPS_API = ("aviary.xdebbie.org", "v1alpha1", "aviaryapps")
+
+
+def aviary_apps():
+    """{tile name: spec} for every AviaryApp; {} when there are none, the CRD
+    is not installed, or this page may not read them."""
+    try:
+        items = client.CustomObjectsApi().list_cluster_custom_object(*APPS_API).get("items", [])
+    except Exception:
+        return {}
+    return {a["metadata"]["name"]: (a.get("spec") or {}) for a in items}
+
+
+def _app_spec(label, d=None):
+    try:
+        return ((d or snapshot()).get("apps") or {}).get(label) or {}
+    except Exception:
+        return {}   # no cluster view: the built-in lists
+
+
+def _blurb(label, default, d=None):
+    return _app_spec(label, d).get("description") or BLURBS.get(label, default)
+
+
+def _noweb(label, d=None):
+    web = _app_spec(label, d).get("web")
+    return label in NOWEB if web is None else not web
+
+
+def _is_system(host, svc, group, d=None):
+    """Whether a route is listed under System (this page always is). Its
+    AviaryApp says; else the route's label; else the built-in list."""
     if svc == "aviary-frontend":
         return True
-    return group == "system" if group else host.split(".", 1)[0] in SYSTEM
+    label = host.split(".", 1)[0]
+    group = _app_spec(label, d).get("group") or group
+    return group == "system" if group else label in SYSTEM
 
 
 def set_exposure(rns, rname, key, on):
@@ -1334,13 +1380,19 @@ def tile_namespaces(ns, label=None, d=None):
     d = d or snapshot()
     if label is None:
         label = next((r[0].split(".", 1)[0] for r in list(d["routes"]) + list(d.get("l4", [])) if r[1] == ns), "")
-    return [ns] + [x for x in d.get("groups", {}).get(label, []) if x != ns]
+    more = list(_app_spec(label, d).get("namespaces") or []) + d.get("groups", {}).get(label, [])
+    out = [ns]
+    for x in more:
+        if x not in out:
+            out.append(x)
+    return out
 
 
 def _snapshot_build():
     gws = gateways()
     return {
         "groups": app_groups(),
+        "apps": aviary_apps(),
         "gateways": gws,
         "routes": routes(gws),
         "l4": l4_routes(gws),
@@ -2545,7 +2597,7 @@ def _system_namespaces():
     only admins may use their controls."""
     d = snapshot()
     return {r[1] for r in list(d["routes"]) + list(d.get("l4", []))
-            if r[2] == "aviary-frontend" or _is_system(r[0], r[2], r[5])}
+            if r[2] == "aviary-frontend" or _is_system(r[0], r[2], r[5], d)}
 
 
 @app.hook("before_request")
@@ -2796,7 +2848,7 @@ def index():
     for (host, ns, svc, port, ip, group, rns, rname, exposed, pub), l4 in rows:
         me_too = svc == "aviary-frontend"  # that's us: listed first under System
         label = host.split(".", 1)[0]
-        blurb = "This page" if me_too else BLURBS.get(label, f"{ns}/{svc}:{port}")
+        blurb = "This page" if me_too else _blurb(label, f"{ns}/{svc}:{port}", d)
         # Figures are summed over the tile's namespaces (its own, and any
         # labelled for it). A sum of high-water marks is at most a little over
         # the true peak of the sum: the namespaces rarely peak together.
@@ -2859,7 +2911,7 @@ def index():
             f'<div class="act images"><button type="button" class="imgs" data-ns="{html.escape(ns)}" '
             f'data-app="{html.escape(label)}" title="workloads and images">&#9776;</button></div>'
         )
-        is_system = _is_system(host, svc, group)
+        is_system = _is_system(host, svc, group, d)
         # System entries are for admins: anyone else sees them greyed out, with
         # no link and no controls (and _system_gate refuses the controls).
         locked = (is_system or me_too) and not admin
@@ -2902,7 +2954,7 @@ def index():
             f'<div class="app">'
             + (f'<span class="noweb" title="for admins">{html.escape(label)}</span>' if locked else
                f'<span class="noweb" title="not a web page: {html.escape(svc)} port {port}">{html.escape(label)}</span>'
-               if l4 or label in NOWEB else f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>') +
+               if l4 or _noweb(label, d) else f'<a href="https://{html.escape(host)}/">{html.escape(label)}</a>') +
             f"<small>{html.escape(blurb)}</small></div>"
             f'<div class="stats">'
             f'<div class="stat wide"><b{cpu_heat}>{cpu}{cpu_hi}</b></div>'
@@ -3971,7 +4023,7 @@ def _chat_system(claude=False):
     try:
         for r in snapshot()["routes"]:
             label = r[0].split(".", 1)[0]
-            lines.append(f"- {label}: {BLURBS.get(label, 'app')} (https://{r[0]}/)")
+            lines.append(f"- {label}: {_blurb(label, 'app')} (https://{r[0]}/)")
     except Exception:
         pass  # no cluster view: it can still chat
     where = f" for the cluster at {BASE_DOMAIN}" if BASE_DOMAIN else ""

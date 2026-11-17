@@ -327,9 +327,11 @@ Details of the dialog worth knowing:
   to pods started from then on.
 - Each of **CPU** and **Memory** shows two pairs of figures: **app** (the
   whole app, now and high-water, the same numbers as on its tile) and
-  **busiest container** (one container, now and high-water; the red line).
-  They differ because a limit is per container while the tile adds up
-  every container.
+  **busiest pod** (one pod, all its containers together, now and
+  high-water, with its workload's name). The bar is filled to the busiest
+  pod now; the **red line is the busiest pod's high-water mark** over the
+  past week, labelled on the line itself, e.g. *peak 40m · jitsi-jitsi-meet-jvb*.
+  The app figures are larger because the tile adds up every pod.
 - **A request can be slid to 0** (the left thumb all the way down), as a
   limit can be slid to none: containers that set no request of their own
   are then promised nothing and are the first to be squeezed or evicted

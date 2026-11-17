@@ -318,6 +318,10 @@ Details of the dialog worth knowing:
   **busiest container** (one container, now and high-water; the red line).
   They differ because a limit is per container while the tile adds up
   every container.
+- **A request can be slid to 0** (the left thumb all the way down), as a
+  limit can be slid to none: containers that set no request of their own
+  are then promised nothing and are the first to be squeezed or evicted
+  when a node runs short.
 - A workload that **cannot run more than one pod is greyed out**, with the
   reason under its name: either its pods would share a volume only one of
   them can attach, or something else (an operator) sets its number. The

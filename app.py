@@ -2040,7 +2040,8 @@ RL_HTML = """
  <p class="note">Requests and limits are defaults for each container in this app that sets none
  of its own (a namespace LimitRange). They apply to each container, so the bar is filled to the app's
  busiest container and the red line is the most one container has used; the whole app's figures, as on
- its tile, are beside them. Slide a limit all the way down for no limit. Pods are set per workload; one
+ its tile, are beside them. Slide a limit all the way down for no limit, a request all the way down
+ for a request of 0. Pods are set per workload; one
  that cannot run more than one pod is greyed out, with the reason.</p>
  <div class="rl-row" data-res="cpu"><div class="rl-head"><b>CPU</b><span class="now"></span></div>
   <div class="rl-slider"><div class="rl-track"><div class="rl-fill"></div></div><div class="rl-band"></div><div class="rl-peak"></div>
@@ -2092,13 +2093,17 @@ RL_HTML = """
       // The limit thumb pulled all the way down: no limit (sent as 0). The
       // request stays where it is; containers run unlimited above it.
       var none = +hi.value <= 0 || (moved === hi && val(+hi.value) < (res === 'cpu' ? 2.5 : 2));
+      // The request thumb pulled all the way down: a request of 0 (containers
+      // that set none are promised nothing, and scheduled as if they need nothing).
+      var zero = +lo.value <= 0 || (moved === lo && val(+lo.value) < (res === 'cpu' ? 2.5 : 2));
+      if (zero) r = 0;
       if (none) l = 0;
       else {
         if (l < floor) l = floor;
         if (r > l) { if (moved === hi) r = l; else l = r; }
       }
       lo.value = pos(r); hi.value = none ? 0 : pos(l);
-      row.querySelector('.req').textContent = fmt(res, r);
+      row.querySelector('.req').textContent = zero ? '0' : fmt(res, r);
       row.querySelector('.lim').textContent = none ? 'none' : fmt(res, l);
       row.querySelector('[name=' + res + '_request]').value = r;
       row.querySelector('[name=' + res + '_limit]').value = l;
@@ -4685,11 +4690,11 @@ def app_resources_set(ns):
         r, l = val[f"{key}_request"], val[f"{key}_limit"]
         if l == 0:
             # No limit: containers that set none run unlimited (only the request applies).
-            if not 0 < r <= cur[key]["top"]:
-                raise HTTPError(400, f"{name}: need 0 < request <= the largest node\n")
+            if not 0 <= r <= cur[key]["top"]:
+                raise HTTPError(400, f"{name}: need 0 <= request <= the largest node\n")
             continue
-        if not 0 < r <= l <= cur[key]["top"]:
-            raise HTTPError(400, f"{name}: need 0 < request <= limit <= the largest node (or limit 0 for none)\n")
+        if not 0 <= r <= l <= cur[key]["top"]:
+            raise HTTPError(400, f"{name}: need 0 <= request <= limit <= the largest node (or limit 0 for none)\n")
         if l < cur[key]["floor"]:
             raise HTTPError(400, f"{name}: a container here already requests more than that limit\n")
     limits = {res: f"{val[f'{key}_limit']}{suffix}" for key, res, suffix in (("cpu", "cpu", "m"), ("mem", "memory", "Mi"))
@@ -4700,6 +4705,8 @@ def app_resources_set(ns):
                      "labels": {"app.kubernetes.io/managed-by": "aviary-frontend"}},
         "spec": {"limits": [dict({
             "type": "Container",
+            # A request of 0 is written out ("0m"), not left off: with a limit
+            # and no default request, Kubernetes would use the limit as the request.
             "defaultRequest": {"cpu": f"{val['cpu_request']}m", "memory": f"{val['mem_request']}Mi"},
         }, **({"default": limits} if limits else {}))]},
     }

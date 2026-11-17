@@ -1,5 +1,7 @@
 # aviary-frontend
 
+![The Aviary landing page: the whiteboard, and the apps list with usage, scale, restart and exposure controls](docs/screenshot.png)
+
 The Aviary landing page: a menu of every app the shared Gateway serves
 (read live from the cluster's `HTTPRoute`s), the cluster CA at `/ca.crt`,
 and a node table.

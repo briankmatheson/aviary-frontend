@@ -41,13 +41,14 @@ button turns the pointer into a pen (strokes are coloured per person);
 `/erase` wipes the drawing, `/clear` the whole board. Both are kept in
 memory, like the lines.
 
-With `ANTHROPIC_API_KEY` set, **Claude** is in the room as well (`CLAUDE_NICK`,
-default `claude`; `CLAUDE_MODEL`, default `claude-opus-5-5`; `CLAUDE_EFFORT`,
-default `medium`), through Anthropic's SDK. It needs no GPU: it answers when
-the cluster's own model is away, and any line that names it. It has the same
-two read-only lookups as the cluster's model. Every reply is billed to that
-key, and what is said in the room is sent to Anthropic's API; the pod needs
-a way out to `api.anthropic.com`.
+**Claude** is optional. With `ANTHROPIC_API_KEY` set it is one more entry in
+the room's model menu (`claude`; `CLAUDE_MODEL`, default `claude-opus-5-5`;
+`CLAUDE_EFFORT`, default `medium`), reached through Anthropic's SDK: choosing
+it switches the room to it instead of the cluster's model, for everyone, like
+any other switch. It needs no GPU, so it is never away, and it has the same
+two read-only lookups. Every reply is billed to that key, and what is said
+in the room while it is chosen is sent to Anthropic's API; the pod needs a
+way out to `api.anthropic.com`.
 
 With `CHAT_URL` set to an OpenAI-compatible API (the cluster's Ollama:
 `http://ollama.aviary-ollama.svc:11434/v1`) the page gets a chat room beside

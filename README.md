@@ -24,6 +24,10 @@ removes its VolumeAttachments and deletes the Node, after asking. It does not
 touch the machine itself or the mesh: a box that has left for good is also
 removed on the hub with `xdctl mesh peer rm`.
 
+The rows of each list can be dragged into another order. The order is each
+person's own, kept per gitea login in the `aviary-menu-order` ConfigMap
+(`MENU_ORDER_CONFIGMAP`), so it follows them to any browser.
+
 Each app row ends in two switches, **private** and **public**: they attach
 the app's `HTTPRoute` to, or detach it from, the internal Gateway (`aviary`)
 and the NATed one (`aviary-nat`, aviary-deploy's `nat_gateway_ip`). System

@@ -184,6 +184,10 @@ Commands, typed as a line:
 | `/stop` (or press Escape while a reply is being written) | Cuts the model's reply short |
 | `/k ...` | Reads the cluster the way `kubectl` would and posts the answer in the room as `<k>`. Read-only: `get`, `describe`, `logs`, `top`, `events`, `api-resources`. Without `-n` it looks in every namespace. Examples: `/k get pods -n aviary-gitea`, `/k get deploy`, `/k logs gitea-0 --tail 20`, `/k top nodes`. `/k` alone shows its usage. It cannot read Secrets or change anything. |
 
+Clicking anywhere on the whiteboard puts the cursor in the input, so you
+can just click and type. (Not while the marker is on, when a click draws,
+and not when you are selecting text to copy.)
+
 Web addresses in a line (anything starting `http://` or `https://`) are
 links; they open in a new tab. While the marker is on, the drawing is on top
 of the text, so turn the marker off to click one.

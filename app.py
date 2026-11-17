@@ -86,11 +86,14 @@ BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")             # https://<bas
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
 BYPASS_TOKEN = os.environ.get("BYPASS_TOKEN", "")
 ADMIN_ONLY = os.environ.get("OAUTH_ADMIN_ONLY", "false").lower() in ("1", "true", "yes")
-# How long a login to this page lasts before it goes back through gitea. Short
-# on purpose: gitea has no way to tell us someone logged out there (or lost
-# their admin team), so that takes effect when the session next runs out. With
-# gitea still signed in, the trip back is a redirect nobody notices.
+# A login to this page runs out after SESSION_MINUTES with no activity (an idle
+# timer: each click, keypress or action starts it again), and in any case
+# SESSION_MAX_MINUTES after signing in. Then it goes back through gitea --
+# a redirect nobody notices while gitea is still signed in. The cap is what
+# makes a logout at gitea, or losing admin there, take effect for someone who
+# never stops using the page: gitea cannot tell this page about either.
 SESSION_SECONDS = max(1, int(os.environ.get("SESSION_MINUTES", "30"))) * 60
+SESSION_MAX_SECONDS = max(1, int(os.environ.get("SESSION_MAX_MINUTES", "720"))) * 60
 # An admin on this page is a gitea site administrator: the is_admin flag on
 # the account (gitea: Site Administration > User Accounts > the user >
 # "Is Administrator"). Nothing else. ADMIN_TEAM ("org:team") can name a gitea
@@ -597,7 +600,13 @@ def admin_sync():
 
 
 def session_seconds():
+    """The idle timer: how long a session lasts with no activity."""
     return _setting("session.minutes", SESSION_SECONDS // 60, 1, 1440) * 60
+
+
+def session_max_seconds():
+    """The cap: how long a session can last from sign-in, however busy."""
+    return _setting("session.maxMinutes", SESSION_MAX_SECONDS // 60, 5, 10080) * 60
 
 
 def admin_team():
@@ -2721,6 +2730,20 @@ PAGE = """<!doctype html>
 // Ctrl+P does nothing on this page. It is "previous line" to anyone with
 // shell habits, and this page has a command line in it: here it would only
 // throw up the browser's print dialog. Printing is still in the browser's menu.
+// The sign-in runs out after a while with nothing done (an idle timer on the
+// server). Clicks, keys and scrolling here count as doing something: tell the
+// server so, at most every two minutes. Background polling does not count.
+(function () {{
+  var last = Date.now();
+  function alive() {{
+    if (Date.now() - last < 120000) return;
+    last = Date.now();
+    fetch('/api/alive', {{ method: 'POST', credentials: 'same-origin', keepalive: true }}).catch(function () {{}});
+  }}
+  ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(function (t) {{
+    document.addEventListener(t, alive, {{ passive: true, capture: true }});
+  }});
+}})();
 document.addEventListener('keydown', function (e) {{
   if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'p' || e.key === 'P')) e.preventDefault();
 }});
@@ -2825,11 +2848,15 @@ def _bypass_ok():
 
 def _session():
     """The signed session cookie, if it is one of ours and has not run out:
-    {"u": gitea login, "a": admin, "x": expiry}. The expiry is inside the
-    signed value, so it holds whatever the browser does with the cookie."""
+    {"u": gitea login, "a": admin, "x": idle expiry, "i": signed in at}. Both
+    times are inside the signed value, so they hold whatever the browser does
+    with the cookie. (A cookie from before "i" counts as signed in at its
+    expiry less the idle time.)"""
     try:
         s = json.loads(request.get_cookie("aviary_session", secret=SESSION_SECRET) or "")
-        if isinstance(s, dict) and s.get("u") and float(s.get("x", 0)) > time.time():
+        now = time.time()
+        if isinstance(s, dict) and s.get("u") and float(s.get("x", 0)) > now \
+                and now - float(s.get("i", float(s.get("x", 0)) - session_seconds())) < session_max_seconds():
             return s
     except Exception:
         pass
@@ -2916,6 +2943,47 @@ def system_lock_route(what):
         raise HTTPError(502, f"could not save the lock: {e.reason}\n")
     _bump()
     redirect("/")
+
+
+def _session_cookie(session):
+    response.set_cookie("aviary_session", json.dumps(session), secret=SESSION_SECRET, httponly=True,
+                        secure=True, samesite="lax", max_age=session_seconds(), path="/")
+
+
+def _activity():
+    """Whether this request is someone doing something -- opening a page, or
+    any change (a POST, the page's own "still here" ping included) -- rather
+    than the page polling in the background, which must not keep an
+    unattended page signed in forever."""
+    if request.method == "POST":
+        return True
+    return request.method == "GET" and not request.path.startswith("/api/") \
+        and request.get_header("Sec-Fetch-Mode", "navigate") == "navigate"
+
+
+@app.hook("before_request")
+def _idle_timer():
+    """Start the idle timer again on activity (at most once a minute: the
+    cookie is re-signed, not stored anywhere). The cap from sign-in stays."""
+    if not AUTH_ENABLED or not _activity():
+        return
+    s = _session()
+    if not s:
+        return
+    now = int(time.time())
+    if float(s["x"]) - now > session_seconds() - 60:
+        return
+    s = dict(s, x=now + session_seconds())
+    s.setdefault("i", now)
+    _session_cookie(s)
+
+
+@app.route("/api/alive", method="POST")
+def api_alive():
+    """The page saying its reader is still at it (a click, a key, scrolling):
+    the idle timer starts again (_idle_timer). Nothing else."""
+    response.set_header("Cache-Control", "no-store")
+    return "ok\n"
 
 
 @app.hook("before_request")
@@ -3005,9 +3073,8 @@ def oauth_callback():
     # Marks a browser that has logged in here (nothing more): see _auth_gate.
     response.set_cookie("aviary_seen", "1", httponly=True, secure=True, samesite="lax",
                         max_age=30 * 86400, path="/")
-    session = {"u": username, "a": bool(_gitea_admin(user, access)), "x": int(time.time()) + session_seconds()}
-    response.set_cookie("aviary_session", json.dumps(session), secret=SESSION_SECRET, httponly=True,
-                        secure=True, samesite="lax", max_age=session_seconds(), path="/")
+    now = int(time.time())
+    _session_cookie({"u": username, "a": bool(_gitea_admin(user, access)), "x": now + session_seconds(), "i": now})
     response.delete_cookie("aviary_admin", path="/", secure=True, samesite="lax")   # pre-session-expiry cookie
     redirect("/")
 

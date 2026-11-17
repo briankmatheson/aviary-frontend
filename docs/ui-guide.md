@@ -64,10 +64,18 @@ top right.
 
 ### 2.3 How long a sign-in lasts
 
-- The landing page session lasts **30 minutes**, then renews itself by passing
-  through Gitea. While you are still signed in to Gitea this is invisible (the
-  page may reload once). If you have signed out of Gitea, you get the sign-in
-  form.
+- The landing page session is an **idle timer**: it runs out after **30
+  minutes with nothing done**. Every click, keypress, scroll or action on the
+  page starts it again; the page polling in the background does not, so an
+  unattended tab does lapse.
+- However busy you are, a session lasts at most **12 hours** from signing in.
+  This is what makes signing out of Gitea, or losing admin there, reach the
+  page eventually: Gitea has no way to tell the page.
+- When either runs out the page renews itself by passing through Gitea.
+  While you are still signed in to Gitea this is invisible (the page may
+  reload once). If you have signed out of Gitea, you get the sign-in form.
+- Both times are set in the AviaryConfig (`spec.session.minutes`,
+  `spec.session.maxMinutes`).
 - A browser that has signed in before goes straight to Gitea when its session
   runs out, instead of showing the front page.
 - Several Aviary tabs open at once are fine.

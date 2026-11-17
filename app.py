@@ -1642,6 +1642,7 @@ CHAT_CSS = """
  #chat.drawing form button.pen { transform: scale(1.5); }
  #chat.drawing form button.pen:hover { transform: scale(2.2); }
  #chat .chat-log .hint { margin: auto; color: #999; font-style: italic; text-align: center; }
+ #chat { cursor: text; }
  #chat .msg { white-space: pre-wrap; overflow-wrap: anywhere; }
  #chat .msg a { color: #1a4d8f; text-decoration: underline; text-underline-offset: 2px; }
  #chat .msg .nick { color: #1a4d8f; }
@@ -1896,6 +1897,15 @@ CHAT_HTML = """
     if (!strokes.length) { note('nothing is drawn'); return; }
     if (confirm('Wipe the drawing for everyone? The lines stay.')) say('/erase');
   };
+  // A click anywhere on the whiteboard puts the cursor in the input -- unless
+  // it was on something of its own (a link, a button), text is being
+  // selected to copy, or the marker is on (then a click draws).
+  box.addEventListener('click', function (e) {
+    if (box.classList.contains('drawing') || inp.disabled) return;
+    if (e.target.closest && e.target.closest('a, button, input, select, textarea')) return;
+    if (String(window.getSelection && window.getSelection() || '')) return;
+    inp.focus();
+  });
   cv.addEventListener('pointerup', lift);
   cv.addEventListener('pointercancel', lift);
   if (window.ResizeObserver) new ResizeObserver(fit).observe(board);

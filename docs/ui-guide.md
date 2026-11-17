@@ -160,7 +160,9 @@ Everyone on the page sees the same lines and the same drawing, live.
 
 In the input, **Up** brings back what you typed before (newest first) and
 **Down** goes forward again; this history is kept only while the page is
-open. **Ctrl+P does nothing** anywhere on this page (it does not open the
+open. **Ctrl+L**, with the cursor in the input, clears the lines from your own view
+as it would a terminal: the room keeps them (a reload brings them back),
+the drawing stays, and nobody else's board changes. **Ctrl+P does nothing** anywhere on this page (it does not open the
 print dialog); printing is still available from the browser's menu.
 
 Commands, typed as a line:

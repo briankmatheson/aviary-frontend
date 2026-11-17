@@ -1659,6 +1659,14 @@ CHAT_HTML = """
   }
   inp.addEventListener('keydown', function (e) {
     var plain = !e.shiftKey && !e.altKey && !e.metaKey;
+    if (e.ctrlKey && plain && (e.key === 'l' || e.key === 'L')) {
+      // Ctrl+L, as in a terminal: clear the lines from this view. Only this
+      // view -- the room keeps them (a reload brings them back), the drawing
+      // stays, and nobody else's board changes. Lines said from now on show.
+      e.preventDefault();
+      rows = {}; log.textContent = '';
+      return;
+    }
     if (e.key === 'ArrowUp' && plain && !e.ctrlKey) { e.preventDefault(); recall(-1); }
     else if (e.key === 'ArrowDown' && plain && !e.ctrlKey) { e.preventDefault(); recall(1); }
   });

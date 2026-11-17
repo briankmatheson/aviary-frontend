@@ -2306,8 +2306,8 @@ def _menu_head(shown, switches):
     a row so each heading sits over its column. `shown` is the exposure
     switches the rows carry; the System list has their columns but no
     switches, so no headings for them (switches=False)."""
-    stats = "".join(f'<div class="stat{" wide" if t in ("CPU", "Memory") else ""}"><span>{t}</span></div>'
-                    for t in ("CPU", "Memory", "Disk Cap", "Disk Tput", "Disk IOPS"))
+    stats = "".join(f'<div class="stat{" wide" if t in ("CPU", "Mem") else ""}"><span>{t}{" now / max" if t in ("CPU", "Mem") else ""}</span></div>'
+                    for t in ("CPU", "Mem", "Disk Cap", "Disk Tput", "Disk IOPS"))
     sw = "".join(f'<div class="sw"><span>{key if switches else ""}</span></div>' for key, _ in shown)
     return (f'<li class="head" aria-hidden="true"><div class="app"></div><div class="stats">{stats}</div>'
             f'<div class="act"></div><div class="act"></div><div class="act"></div><div class="act"></div>{sw}</li>')
